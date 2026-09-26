@@ -42,6 +42,19 @@ try {
     Add-Type -AssemblyName System.Drawing
     Add-Type -AssemblyName Microsoft.VisualBasic
 
+    # Win32 helper so we can keep the ASCII-logo console visible on launch,
+    # then quietly hide it a few seconds later while the GUI stays open.
+    try {
+        if (-not ('Highsense.NativeConsole' -as [type])) {
+            Add-Type -Namespace Highsense -Name NativeConsole -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")]
+public static extern System.IntPtr GetConsoleWindow();
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+'@
+        }
+    } catch {}
+
     [System.Windows.Forms.Application]::EnableVisualStyles()
     [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
@@ -2490,6 +2503,22 @@ Select categories and click Clean Selected.
         Switch-Panels $tab1Panel $cleanerContainer $true
         $script:activeTab = 2
     })
+
+    # Keep the console (with the ASCII logo) visible when launching, then hide
+    # it automatically 3 seconds after the GUI appears. The timer runs on the
+    # UI message loop that ShowDialog pumps, so it fires reliably.
+    $script:consoleHideTimer = New-Object System.Windows.Forms.Timer
+    $script:consoleHideTimer.Interval = 3000
+    $script:consoleHideTimer.Add_Tick({
+        $script:consoleHideTimer.Stop()
+        try {
+            $hWndConsole = [Highsense.NativeConsole]::GetConsoleWindow()
+            if ($hWndConsole -ne [System.IntPtr]::Zero) {
+                [void][Highsense.NativeConsole]::ShowWindow($hWndConsole, 0)  # 0 = SW_HIDE
+            }
+        } catch {}
+    })
+    $form.Add_Shown({ $script:consoleHideTimer.Start() })
 
     [void]$form.ShowDialog()
 }
