@@ -676,37 +676,28 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                         $ccx = $cx + $d / 2.0
                         $ccy = $cy + $d / 2.0
                         if ($st -eq 'APPLIED') {
-                            # smooth premium twinkle: clearly waxes and wanes but never dies out
+                            # Premium "exposure" pulse: a clean white light that dips to near-dark,
+                            # then flares back brighter than normal. No persistent round glow blob -
+                            # a tight soft bloom only blooms in near the bright peak (over-exposed feel).
                             $wave = 0.5 - 0.5 * [math]::Cos([double]$script:pulsePhase)
-                            $gi = 0.15 + 0.85 * $wave
-                            # soft radial halo via true gradient, kept clear of the rounded corner (no pixel edge)
-                            $haloR = 10
-                            $hpath = New-Object System.Drawing.Drawing2D.GraphicsPath
-                            $hpath.AddEllipse([single]($ccx - $haloR), [single]($ccy - $haloR), [single]($haloR * 2), [single]($haloR * 2))
-                            $pgb = New-Object System.Drawing.Drawing2D.PathGradientBrush($hpath)
-                            $centerAl = [int](120 * $gi)
-                            if ($centerAl -gt 255) { $centerAl = 255 }
-                            $pgb.CenterColor = [System.Drawing.Color]::FromArgb($centerAl, 255, 255, 255)
-                            $pgb.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 255, 255, 255))
-                            $pgb.CenterPoint = New-Object System.Drawing.PointF([single]$ccx, [single]$ccy)
-                            $e.Graphics.FillPath($pgb, $hpath)
-                            $pgb.Dispose(); $hpath.Dispose()
-                            # inner soft bloom, tighter and brighter
-                            $bloomR = 5
+                            # dot brightness: dips almost dark, peaks at full crisp white
+                            $coreAl = [int](38 + 217 * $wave)
+                            if ($coreAl -gt 255) { $coreAl = 255 }
+                            if ($coreAl -lt 0) { $coreAl = 0 }
+                            # exposure bloom weighted to the peak so the dim phase stays a clean dot
+                            $expo = [math]::Pow($wave, 2.4)
+                            $bloomR = 6
                             $bpath = New-Object System.Drawing.Drawing2D.GraphicsPath
                             $bpath.AddEllipse([single]($ccx - $bloomR), [single]($ccy - $bloomR), [single]($bloomR * 2), [single]($bloomR * 2))
                             $bgb = New-Object System.Drawing.Drawing2D.PathGradientBrush($bpath)
-                            $bloomAl = [int](50 + 130 * $gi)
+                            $bloomAl = [int](170 * $expo)
                             if ($bloomAl -gt 255) { $bloomAl = 255 }
                             $bgb.CenterColor = [System.Drawing.Color]::FromArgb($bloomAl, 255, 255, 255)
                             $bgb.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 255, 255, 255))
                             $bgb.CenterPoint = New-Object System.Drawing.PointF([single]$ccx, [single]$ccy)
                             $e.Graphics.FillPath($bgb, $bpath)
                             $bgb.Dispose(); $bpath.Dispose()
-                            # crisp anti-aliased white core that clearly twinkles along with the glow
-                            $coreAl = [int](70 + 185 * $wave)
-                            if ($coreAl -gt 255) { $coreAl = 255 }
-                            if ($coreAl -lt 0) { $coreAl = 0 }
+                            # crisp anti-aliased white core
                             $cb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($coreAl, 255, 255, 255))
                             $e.Graphics.FillEllipse($cb, [single]$cx, [single]$cy, [single]$d, [single]$d)
                             $cb.Dispose()
