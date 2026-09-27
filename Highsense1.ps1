@@ -529,6 +529,18 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     $form.Controls.Add($script:tabIndicator)
     $script:tabIndicator.BringToFront()
 
+    # Second accent bar: sweeps in from the OPPOSITE side so the two bars cross
+    # each other and converge under the freshly-selected tab (premium dual glide).
+    # At rest it sits exactly on top of the primary bar, so it reads as one clean line.
+    $script:tabIndicatorB = New-Object System.Windows.Forms.Panel
+    $script:tabIndicatorB.Size = New-Object System.Drawing.Size(248, 3)
+    $script:tabIndicatorB.Location = New-Object System.Drawing.Point(24, 113)
+    $script:tabIndicatorB.BackColor = $script:tabAccent
+    Set-GlassPanel $script:tabIndicatorB 3 $script:tabAccent 0 0
+    $form.Controls.Add($script:tabIndicatorB)
+    $script:tabIndicatorB.BringToFront()
+    $script:tabIndicator.BringToFront()
+
     # Enable double-buffering on containers so the tab-switch slide repaints in one
     # smooth pass (no tearing/jank while the panels glide). Uses the protected
     # DoubleBuffered property via reflection - safe and standard for WinForms.
@@ -752,26 +764,48 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
         $incoming.BringToFront()
         $outgoing.Visible  = $false
         $outgoing.Location = New-Object System.Drawing.Point(0, 0)
+        if ($null -ne $script:tabIndicatorB) { $script:tabIndicatorB.BringToFront() }
         if ($null -ne $script:tabIndicator) { $script:tabIndicator.BringToFront() }
 
-        # smooth premium glide of the accent indicator (ease-out-cubic, Stopwatch timed)
+        # Premium DUAL glide: two accent bars sweep toward the target from opposite
+        # sides, cross each other mid-way, then converge and overlap into one clean
+        # line under the selected tab. Ease-in-out-cubic = slow start, quick middle,
+        # soft landing (luxurious, smooth).
         if ($null -ne $indicatorTargetX -and $null -ne $script:tabIndicator) {
-            $startX = [double]$script:tabIndicator.Location.X
-            $delta  = $indicatorTargetX - $startX
-            if ([math]::Abs($delta) -ge 1) {
+            $aStart = [double]$script:tabIndicator.Location.X
+            # mirror the primary bar's start across the target so B arrives from the
+            # other direction (2*target - aStart puts B symmetrically on the far side)
+            $bStart = (2.0 * $indicatorTargetX) - $aStart
+            $aDelta = $indicatorTargetX - $aStart
+            $bDelta = $indicatorTargetX - $bStart
+            if ($null -ne $script:tabIndicatorB) {
+                $script:tabIndicatorB.Location = New-Object System.Drawing.Point([int]$bStart, 113)
+                $script:tabIndicatorB.Visible = $true
+                $script:tabIndicatorB.BringToFront()
+            }
+            $script:tabIndicator.BringToFront()
+            if ([math]::Abs($aDelta) -ge 1) {
                 $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                $dur = 240.0
+                $dur = 460.0
                 while ($true) {
                     $t = $sw.Elapsed.TotalMilliseconds / $dur
                     if ($t -ge 1) { break }
-                    $ease = 1 - [math]::Pow(1 - $t, 3)
-                    $x = [int]($startX + $delta * $ease)
-                    $script:tabIndicator.Location = New-Object System.Drawing.Point($x, 113)
+                    if ($t -lt 0.5) {
+                        $ease = 4.0 * $t * $t * $t
+                    } else {
+                        $ease = 1.0 - ([math]::Pow(((-2.0 * $t) + 2.0), 3) / 2.0)
+                    }
+                    $ax = [int]($aStart + $aDelta * $ease)
+                    $bx = [int]($bStart + $bDelta * $ease)
+                    $script:tabIndicator.Location = New-Object System.Drawing.Point($ax, 113)
+                    if ($null -ne $script:tabIndicatorB) { $script:tabIndicatorB.Location = New-Object System.Drawing.Point($bx, 113) }
                     [System.Windows.Forms.Application]::DoEvents()
                     Start-Sleep -Milliseconds 5
                 }
-                $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$indicatorTargetX, 113)
             }
+            # settle both bars exactly on the target so they merge into one crisp line
+            $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$indicatorTargetX, 113)
+            if ($null -ne $script:tabIndicatorB) { $script:tabIndicatorB.Location = New-Object System.Drawing.Point([int]$indicatorTargetX, 113) }
         }
     }
 
