@@ -862,16 +862,11 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
                         $st = $script:moduleStatus[$key]
                         $rad = $s.Height
                         $by = [double]($s.Height - 2.5)
-                        $bx1 = [double]$rad
-                        $bx2 = [double]($s.Width - $rad)
+                        $bx1 = [double]($rad / 2.0)
+                        $bx2 = [double]($s.Width - $rad / 2.0)
                         $span = $bx2 - $bx1
                         if ($span -gt 4) {
                             if ($st -eq 'APPLIED') {
-                                # faint always-on base line so the bottom edge reads softly
-                                $basePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(16, 255, 255, 255), [single]1.0)
-                                $e.Graphics.DrawLine($basePen, [single]$bx1, [single]$by, [single]$bx2, [single]$by)
-                                $basePen.Dispose()
-
                                 # Premium DUAL orbit: two comet-like light beams travel the
                                 # bottom edge in OPPOSITE directions - beam A slides left->right,
                                 # beam B slides right->left. Each has a bright head with a soft
