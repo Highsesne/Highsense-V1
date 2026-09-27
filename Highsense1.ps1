@@ -665,94 +665,55 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                     $pen.Dispose(); $gp.Dispose()
                 }
 
-                # per-module status dot - glowing white when applied, dim ring when not
+                # per-module status: a soft white light that glides back and forth
+                # along ONLY the bottom edge of the category when applied - smooth,
+                # dim, easing at the turns then continuing seamlessly.
                 if ($null -ne $s.Tag) {
                     $key = $s.Tag.statusKey
                     if ($key) {
                         $st = $script:moduleStatus[$key]
-                        $d = 8
-                        $cx = $s.Width - 27
-                        $cy = 11
-                        $ccx = $cx + $d / 2.0
-                        $ccy = $cy + $d / 2.0
-                        if ($st -eq 'APPLIED') {
-                            # Holographic sheen dot: an iridescent gradient that slowly rotates,
-                            # with a soft specular streak sweeping across - like the foil on a
-                            # collectible card. Subtle, cool-toned, premium.
-                            $phase = [double]$script:pulsePhase
-                            $twoPi = 6.2831853
-                            # gentle breathing so it feels alive without flashing
-                            $breathe = 0.74 + 0.26 * (0.5 - 0.5 * [math]::Cos($phase))
+                        $rad = 12
+                        $by = [double]($s.Height - 2.5)
+                        $bx1 = [double]$rad
+                        $bx2 = [double]($s.Width - $rad)
+                        $span = $bx2 - $bx1
+                        if ($span -gt 4) {
+                            if ($st -eq 'APPLIED') {
+                                # faint always-on base line so the bottom edge reads softly
+                                $basePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(16, 255, 255, 255), [single]1.0)
+                                $e.Graphics.DrawLine($basePen, [single]$bx1, [single]$by, [single]$bx2, [single]$by)
+                                $basePen.Dispose()
 
-                            # soft outer bloom in a cool iridescent tint
-                            $bloomR = 6
-                            $bpath = New-Object System.Drawing.Drawing2D.GraphicsPath
-                            $bpath.AddEllipse([single]($ccx - $bloomR), [single]($ccy - $bloomR), [single]($bloomR * 2), [single]($bloomR * 2))
-                            $bgb = New-Object System.Drawing.Drawing2D.PathGradientBrush($bpath)
-                            $bloomAl = [int](66 * $breathe)
-                            if ($bloomAl -gt 255) { $bloomAl = 255 }
-                            $bgb.CenterColor = [System.Drawing.Color]::FromArgb($bloomAl, 150, 205, 255)
-                            $bgb.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 150, 205, 255))
-                            $bgb.CenterPoint = New-Object System.Drawing.PointF([single]$ccx, [single]$ccy)
-                            $e.Graphics.FillPath($bgb, $bpath)
-                            $bgb.Dispose(); $bpath.Dispose()
-
-                            # clip painting to the dot circle so the sheen stays inside
-                            $dotPath = New-Object System.Drawing.Drawing2D.GraphicsPath
-                            $dotPath.AddEllipse([single]$cx, [single]$cy, [single]$d, [single]$d)
-                            $gstate = $e.Graphics.Save()
-                            $e.Graphics.SetClip($dotPath)
-
-                            # iridescent rotating gradient fill
-                            $grect = New-Object System.Drawing.RectangleF([single]($cx - 2), [single]($cy - 2), [single]($d + 4), [single]($d + 4))
-                            $lg = New-Object System.Drawing.Drawing2D.LinearGradientBrush($grect, [System.Drawing.Color]::White, [System.Drawing.Color]::White, [single]0.0)
-                            $ia = [int](205 * $breathe)
-                            if ($ia -gt 255) { $ia = 255 }
-                            $blend = New-Object System.Drawing.Drawing2D.ColorBlend(5)
-                            $blend.Colors = @(
-                                [System.Drawing.Color]::FromArgb($ia, 90, 220, 245),
-                                [System.Drawing.Color]::FromArgb($ia, 130, 150, 255),
-                                [System.Drawing.Color]::FromArgb($ia, 225, 140, 240),
-                                [System.Drawing.Color]::FromArgb($ia, 245, 225, 160),
-                                [System.Drawing.Color]::FromArgb($ia, 90, 220, 245)
-                            )
-                            $blend.Positions = @([single]0.0, [single]0.28, [single]0.55, [single]0.8, [single]1.0)
-                            $lg.InterpolationColors = $blend
-                            $ang = ($phase / $twoPi) * 360.0
-                            $lg.RotateTransform([single]$ang)
-                            $e.Graphics.FillEllipse($lg, [single]$cx, [single]$cy, [single]$d, [single]$d)
-                            $lg.Dispose()
-
-                            # sweeping specular streak (the foil shine)
-                            $sweep = (($phase / $twoPi) * ($d + 6)) - 3
-                            $sx = $cx + $sweep
-                            $streakAl = [int](150 * $breathe)
-                            if ($streakAl -gt 255) { $streakAl = 255 }
-                            $spen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($streakAl, 255, 255, 255), [single]2.0)
-                            $e.Graphics.DrawLine($spen, [single]$sx, [single]($cy - 2), [single]($sx - 3), [single]($cy + $d + 2))
-                            $spen.Dispose()
-
-                            # top-left glass highlight for depth
-                            $hlAl = [int](120 * $breathe)
-                            if ($hlAl -gt 255) { $hlAl = 255 }
-                            $hb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($hlAl, 255, 255, 255))
-                            $e.Graphics.FillEllipse($hb, [single]($cx + 1.6), [single]($cy + 1.3), [single]2.2, [single]2.2)
-                            $hb.Dispose()
-
-                            $e.Graphics.ResetClip()
-                            $e.Graphics.Restore($gstate)
-                            $dotPath.Dispose()
-
-                            # crisp cool rim to define the dot edge
-                            $rimAl = [int](110 * $breathe)
-                            if ($rimAl -gt 255) { $rimAl = 255 }
-                            $rimPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($rimAl, 200, 225, 255), [single]1.0)
-                            $e.Graphics.DrawEllipse($rimPen, [single]$cx, [single]$cy, [single]$d, [single]$d)
-                            $rimPen.Dispose()
-                        } else {
-                            $pn = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(90, 200, 200, 205), 1.4)
-                            $e.Graphics.DrawEllipse($pn, [single]$cx, [single]$cy, [single]$d, [single]$d)
-                            $pn.Dispose()
+                                # smooth ping-pong: sine eases the light at each turn
+                                $u = 0.5 + 0.5 * [math]::Sin([double]$script:pulsePhase)
+                                $c = $bx1 + $span * $u
+                                $sigma = $span * 0.16
+                                if ($sigma -lt 1) { $sigma = 1 }
+                                # fade toward the turns so the light melts away then returns
+                                $edge = [math]::Sin([math]::PI * $u)
+                                $peak = 140 * [math]::Pow($edge, 0.6)
+                                if ($peak -gt 4) {
+                                    $x = $bx1
+                                    while ($x -le $bx2) {
+                                        $dd = ($x - $c) / $sigma
+                                        $al = [int]($peak * [math]::Exp(-($dd * $dd)))
+                                        if ($al -gt 4) {
+                                            if ($al -gt 255) { $al = 255 }
+                                            $lp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($al, 255, 255, 255), [single]1.6)
+                                            $lp.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+                                            $lp.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+                                            $e.Graphics.DrawLine($lp, [single]$x, [single]$by, [single]($x + 1.8), [single]$by)
+                                            $lp.Dispose()
+                                        }
+                                        $x += 1.6
+                                    }
+                                }
+                            } else {
+                                # not applied: a very faint static bottom line
+                                $offPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(12, 200, 205, 215), [single]1.0)
+                                $e.Graphics.DrawLine($offPen, [single]$bx1, [single]$by, [single]$bx2, [single]$by)
+                                $offPen.Dispose()
+                            }
                         }
                     }
                 }
