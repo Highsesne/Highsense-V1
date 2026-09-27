@@ -665,54 +665,46 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                     $pen.Dispose(); $gp.Dispose()
                 }
 
-                # per-module status indicator - premium vertical ACCENT BAR on the LEFT edge.
-                # Applied  = steady bright capsule (settles still). A one-shot light SWEEP
-                #            glides across the whole button the moment it turns Applied.
-                # Not done = a quiet dim capsule. No round dot / halo blob.
+                # per-module status dot - glowing white when applied, dim ring when not
                 if ($null -ne $s.Tag) {
                     $key = $s.Tag.statusKey
                     if ($key) {
                         $st = $script:moduleStatus[$key]
-                        $barW = 3.0
-                        $barX = 6.0
-                        $barH = [double]$s.Height * 0.55
-                        $barY = ([double]$s.Height - $barH) / 2.0
-
-                        # capsule (pill) path for the accent bar - rounded top & bottom caps
-                        $cap = New-Object System.Drawing.Drawing2D.GraphicsPath
-                        $cap.AddArc([single]$barX, [single]$barY, [single]$barW, [single]$barW, 180, 180)
-                        $cap.AddArc([single]$barX, [single]($barY + $barH - $barW), [single]$barW, [single]$barW, 0, 180)
-                        $cap.CloseFigure()
-
+                        $d = 7
+                        $cx = $s.Width - 26
+                        $cy = 12
+                        $ccx = $cx + $d / 2.0
+                        $ccy = $cy + $d / 2.0
                         if ($st -eq 'APPLIED') {
-                            # steady bright bar - no breathing, it just stays lit
-                            $sb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(235, 255, 255, 255))
-                            $e.Graphics.FillPath($sb, $cap)
-                            $sb.Dispose()
+                            # Premium "exposure" pulse: a clean white light that dips to near-dark,
+                            # then flares back brighter than normal. No persistent round glow blob -
+                            # a tight soft bloom only blooms in near the bright peak (over-exposed feel).
+                            $wave = 0.5 - 0.5 * [math]::Cos([double]$script:pulsePhase)
+                            # dot brightness: dips almost dark, peaks at full crisp white
+                            $coreAl = [int](38 + 217 * $wave)
+                            if ($coreAl -gt 255) { $coreAl = 255 }
+                            if ($coreAl -lt 0) { $coreAl = 0 }
+                            # exposure bloom weighted to the peak so the dim phase stays a clean dot
+                            $expo = [math]::Pow($wave, 2.4)
+                            $bloomR = 6
+                            $bpath = New-Object System.Drawing.Drawing2D.GraphicsPath
+                            $bpath.AddEllipse([single]($ccx - $bloomR), [single]($ccy - $bloomR), [single]($bloomR * 2), [single]($bloomR * 2))
+                            $bgb = New-Object System.Drawing.Drawing2D.PathGradientBrush($bpath)
+                            $bloomAl = [int](170 * $expo)
+                            if ($bloomAl -gt 255) { $bloomAl = 255 }
+                            $bgb.CenterColor = [System.Drawing.Color]::FromArgb($bloomAl, 255, 255, 255)
+                            $bgb.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 255, 255, 255))
+                            $bgb.CenterPoint = New-Object System.Drawing.PointF([single]$ccx, [single]$ccy)
+                            $e.Graphics.FillPath($bgb, $bpath)
+                            $bgb.Dispose(); $bpath.Dispose()
+                            # crisp anti-aliased white core
+                            $cb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($coreAl, 255, 255, 255))
+                            $e.Graphics.FillEllipse($cb, [single]$cx, [single]$cy, [single]$d, [single]$d)
+                            $cb.Dispose()
                         } else {
-                            # quiet, static dim bar
-                            $sb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(55, 200, 200, 205))
-                            $e.Graphics.FillPath($sb, $cap)
-                            $sb.Dispose()
-                        }
-                        $cap.Dispose()
-
-                        # C2 one-shot light SWEEP across the whole button (auto-clipped to the rounded shape)
-                        if ($null -ne $script:sweep -and $script:sweep.ContainsKey($key)) {
-                            $sp = [double]$script:sweep[$key]
-                            $bandW = 48.0
-                            $cxpos = (-0.25 + 1.5 * $sp) * [double]$s.Width
-                            $brect = New-Object System.Drawing.RectangleF([single]($cxpos - $bandW / 2.0), [single](-2), [single]$bandW, [single]($s.Height + 4))
-                            $lg = New-Object System.Drawing.Drawing2D.LinearGradientBrush($brect, [System.Drawing.Color]::White, [System.Drawing.Color]::White, [single]0.0)
-                            $cbld = New-Object System.Drawing.Drawing2D.ColorBlend(3)
-                            $cbld.Colors = @(
-                                [System.Drawing.Color]::FromArgb(0, 255, 255, 255),
-                                [System.Drawing.Color]::FromArgb(80, 255, 255, 255),
-                                [System.Drawing.Color]::FromArgb(0, 255, 255, 255))
-                            $cbld.Positions = @([single]0.0, [single]0.5, [single]1.0)
-                            $lg.InterpolationColors = $cbld
-                            $e.Graphics.FillRectangle($lg, $brect)
-                            $lg.Dispose()
+                            $pn = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(90, 200, 200, 205), 1.4)
+                            $e.Graphics.DrawEllipse($pn, [single]$cx, [single]$cy, [single]$d, [single]$d)
+                            $pn.Dispose()
                         }
                     }
                 }
@@ -779,7 +771,7 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
         if ($script:moduleButtons.ContainsKey($key)) {
             try { $script:moduleButtons[$key].Invalidate() } catch {}
         }
-        if ($state -eq 'APPLIED') { Start-Sweep $key }
+        Ensure-PulseTimer
     }
 
     function Reset-ModuleStatus {
@@ -808,40 +800,12 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     })
 
     function Ensure-PulseTimer {
-        # Status bars are now steady (no perpetual breathing). Just repaint applied
-        # modules once so their bright accent bar shows after launch. The sweep is a
-        # one-shot effect triggered only when a module turns Applied.
         foreach ($k in @('CMD','POWERPLAN','NET','SYSTEM','INPUT')) {
-            if ($script:moduleStatus[$k] -eq 'APPLIED' -and $script:moduleButtons.ContainsKey($k)) {
-                try { $script:moduleButtons[$k].Invalidate() } catch {}
+            if ($script:moduleStatus[$k] -eq 'APPLIED') {
+                if (-not $script:pulseTimer.Enabled) { $script:pulseTimer.Start() }
+                return
             }
         }
-    }
-
-    # ---- C2: one-shot light SWEEP that glides across a button the moment it turns Applied ----
-    $script:sweep = @{}
-    $script:sweepTimer = New-Object System.Windows.Forms.Timer
-    $script:sweepTimer.Interval = 16
-    $script:sweepTimer.Add_Tick({
-        $active = $false
-        foreach ($k in @($script:sweep.Keys)) {
-            $p = [double]$script:sweep[$k] + 0.06
-            if ($p -ge 1.35) {
-                $script:sweep.Remove($k)
-            } else {
-                $script:sweep[$k] = $p
-                $active = $true
-            }
-            if ($script:moduleButtons.ContainsKey($k)) { try { $script:moduleButtons[$k].Invalidate() } catch {} }
-        }
-        if (-not $active) { $script:sweepTimer.Stop() }
-    })
-
-    function Start-Sweep($key) {
-        if (-not $key) { return }
-        $script:sweep[$key] = 0.0
-        if (-not $script:sweepTimer.Enabled) { $script:sweepTimer.Start() }
-        if ($script:moduleButtons.ContainsKey($key)) { try { $script:moduleButtons[$key].Invalidate() } catch {} }
     }
 
 
