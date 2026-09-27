@@ -879,8 +879,14 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
                                 # the two clearly PASS THROUGH each other rather than bounce.
                                 # Both fade fully to nothing right at the ends, then re-emerge
                                 # from the start of their travel - a clean, looping cross.
-                                $fA = [double]$script:pulsePhase / 6.2831853
-                                $fA = $fA - [math]::Floor($fA)
+                                $p = [double]$script:pulsePhase / 6.2831853
+                                $p = $p - [math]::Floor($p)
+                                # each cycle = one travel sweep, then a ~1.5s dark HOLD where
+                                # both beams stay fully gone before the next sweep begins
+                                $travelFrac = 0.57
+                                $fA = 0.0
+                                $inHold = $true
+                                if ($p -lt $travelFrac) { $fA = $p / $travelFrac; $inHold = $false }
                                 $fB = 1.0 - $fA
                                 $cA = $bx1 + $span * $fA
                                 $cB = $bx1 + $span * $fB
@@ -899,6 +905,7 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
                                 if ($sTail -lt 1) { $sTail = 1 }
                                 $peakA = 165 * $envA
                                 $peakB = 165 * $envB
+                                if ($inHold) { $peakA = 0; $peakB = 0 }
                                 if ($peakA -gt 3 -or $peakB -gt 3) {
                                     $x = $bx1
                                     while ($x -le $bx2) {
@@ -1010,7 +1017,7 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     $script:pulseTimer = New-Object System.Windows.Forms.Timer
     $script:pulseTimer.Interval = 25
     $script:pulseTimer.Add_Tick({
-        $script:pulsePhase += 0.079
+        $script:pulsePhase += 0.045
         if ($script:pulsePhase -gt 6.2831853) { $script:pulsePhase -= 6.2831853 }
         $any = $false
         foreach ($k in @('CMD','POWERPLAN','NET','SYSTEM','INPUT')) {
