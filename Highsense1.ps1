@@ -78,9 +78,11 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     $script:tabAccent  = [System.Drawing.Color]::FromArgb(248, 250, 253)
     $textPrimary       = [System.Drawing.Color]::FromArgb(240, 240, 240)
     $textMuted         = [System.Drawing.Color]::FromArgb(150, 150, 150)
-    $btnColor          = [System.Drawing.Color]::FromArgb(32, 32, 32)
-    $btnHoverColor     = [System.Drawing.Color]::FromArgb(60, 60, 60)
-    $btnActiveColor    = [System.Drawing.Color]::FromArgb(80, 80, 80)
+    # Category cards: deep near-black with a faint cool glass tint (darker,
+    # less flat-grey than before) so they melt into the dark theme.
+    $btnColor          = [System.Drawing.Color]::FromArgb(20, 20, 24)
+    $btnHoverColor     = [System.Drawing.Color]::FromArgb(38, 40, 48)
+    $btnActiveColor    = [System.Drawing.Color]::FromArgb(52, 55, 66)
     $btnText           = [System.Drawing.Color]::FromArgb(235, 235, 235)
     $progressBgColor   = [System.Drawing.Color]::FromArgb(40, 40, 40)
     # Monochrome accent (black/grey theme) used across progress, indicator, border
