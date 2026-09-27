@@ -589,7 +589,7 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     }
     Render-Log
     $tab1Panel.Controls.Add($txtLog)
-    [void](Wrap-GlassCard $txtLog 14 6)
+    [void](Wrap-GlassCard $txtLog 14 6 ([System.Drawing.Color]::FromArgb(13, 13, 16)))
 
 
     $pBarBg = New-Object System.Windows.Forms.Panel
@@ -2415,7 +2415,7 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
 Select categories and click Clean Selected.
 "@
     $cleanerContainer.Controls.Add($txtCleanerLog)
-    [void](Wrap-GlassCard $txtCleanerLog 14 6)
+    [void](Wrap-GlassCard $txtCleanerLog 14 6 ([System.Drawing.Color]::FromArgb(13, 13, 16)))
 
     $pCleanerBarBg = New-Object System.Windows.Forms.Panel
     $pCleanerBarBg.Size = New-Object System.Drawing.Size(502, 6)
