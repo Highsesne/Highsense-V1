@@ -600,131 +600,41 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
         $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$targetX, 113)
     }
 
-    # Premium synchronized tab transition: the incoming panel glides in vertically
-    # while the accent indicator slides across - both driven by one ease-out-cubic
-    # curve on a Stopwatch, so the motion is smooth and consistent on any machine
-    # (no fixed step count = no jank/lag). Double-buffered containers keep it clean.
-    # Premium tab transition: a smooth CROSS-FADE (with a subtle rise) between the two
-    # panels. Instead of dragging heavy live control trees around (which stutters), we
-    # snapshot each panel to a bitmap once and alpha-blend them on one double-buffered
-    # overlay - so every frame only paints a single image. Buttery, no jank. The accent
-    # indicator glides across in sync. Timing is Stopwatch-based (machine independent).
+    # Clean, artifact-free tab transition.
+    #
+    # Why not a bitmap cross-fade: WinForms has no real per-control opacity, so a true
+    # fade requires snapshotting the panels - but DrawToBitmap ignores each button's
+    # rounded Region, so the snapshot shows SQUARE corners and swapping the overlay in/out
+    # flickers. To keep every rounded corner crisp and avoid any flicker, the content is
+    # swapped instantly (no distortion) and the premium motion lives in the accent
+    # indicator, which is a small solid bar that glides perfectly smoothly.
     function Switch-Panels($outgoing, $incoming, $forward, $indicatorTargetX) {
-        $w = $outgoing.Width
-        $h = $outgoing.Height
-        if ($w -le 0 -or $h -le 0) {
-            $incoming.Location = New-Object System.Drawing.Point(0, 0)
-            $incoming.Visible = $true; $incoming.BringToFront(); $outgoing.Visible = $false
-            if ($null -ne $indicatorTargetX -and $null -ne $script:tabIndicator) {
+        # instant, pixel-perfect content swap (rounded UI stays crisp, zero flicker)
+        $incoming.Location = New-Object System.Drawing.Point(0, 0)
+        $incoming.Visible  = $true
+        $incoming.BringToFront()
+        $outgoing.Visible  = $false
+        $outgoing.Location = New-Object System.Drawing.Point(0, 0)
+        if ($null -ne $script:tabIndicator) { $script:tabIndicator.BringToFront() }
+
+        # smooth premium glide of the accent indicator (ease-out-cubic, Stopwatch timed)
+        if ($null -ne $indicatorTargetX -and $null -ne $script:tabIndicator) {
+            $startX = [double]$script:tabIndicator.Location.X
+            $delta  = $indicatorTargetX - $startX
+            if ([math]::Abs($delta) -ge 1) {
+                $sw = [System.Diagnostics.Stopwatch]::StartNew()
+                $dur = 240.0
+                while ($true) {
+                    $t = $sw.Elapsed.TotalMilliseconds / $dur
+                    if ($t -ge 1) { break }
+                    $ease = 1 - [math]::Pow(1 - $t, 3)
+                    $x = [int]($startX + $delta * $ease)
+                    $script:tabIndicator.Location = New-Object System.Drawing.Point($x, 113)
+                    [System.Windows.Forms.Application]::DoEvents()
+                    Start-Sleep -Milliseconds 5
+                }
                 $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$indicatorTargetX, 113)
             }
-            return
-        }
-        $pulseWas = $false
-        try { $pulseWas = $script:pulseTimer.Enabled } catch {}
-        try { $script:pulseTimer.Stop() } catch {}
-        try { $script:animTimer.Stop() } catch {}
-
-        $indStart = if ($null -ne $script:tabIndicator) { [double]$script:tabIndicator.Location.X } else { 0.0 }
-        $indDelta = if ($null -ne $indicatorTargetX) { $indicatorTargetX - $indStart } else { 0.0 }
-
-        $overlay = $null
-        $outBmp  = $null
-        $inBmp   = $null
-        try {
-            $rectFull = New-Object System.Drawing.Rectangle(0, 0, $w, $h)
-
-            # 1) snapshot the current (outgoing) panel
-            $outBmp = New-Object System.Drawing.Bitmap($w, $h)
-            $outgoing.DrawToBitmap($outBmp, $rectFull)
-
-            # 2) put a double-buffered overlay on top FIRST, showing the outgoing
-            #    snapshot - this hides any layout flash while we prep the incoming panel.
-            $script:fadeOutBmp = $outBmp
-            $script:fadeInBmp  = $null
-            $script:fadeT      = 0.0
-            $overlay = New-Object System.Windows.Forms.Panel
-            $overlay.Size = New-Object System.Drawing.Size($w, $h)
-            $overlay.Location = New-Object System.Drawing.Point(0, 0)
-            Set-DoubleBuffered $overlay
-            $overlay.Add_Paint({
-                param($s, $e)
-                $g = $e.Graphics
-                $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBilinear
-                if ($null -ne $script:fadeOutBmp) {
-                    # outgoing fades out (drawn under the incoming); slight downward drift
-                    $ia0 = New-Object System.Drawing.Imaging.ImageAttributes
-                    $cm0 = New-Object System.Drawing.Imaging.ColorMatrix
-                    $cm0.Matrix33 = [single](1.0 - $script:fadeT)
-                    $ia0.SetColorMatrix($cm0)
-                    $dy0 = [int]($script:fadeT * 8)
-                    $r0 = New-Object System.Drawing.Rectangle(0, $dy0, $s.Width, $s.Height)
-                    $g.DrawImage($script:fadeOutBmp, $r0, 0, 0, $script:fadeOutBmp.Width, $script:fadeOutBmp.Height, [System.Drawing.GraphicsUnit]::Pixel, $ia0)
-                    $ia0.Dispose()
-                }
-                if ($null -ne $script:fadeInBmp) {
-                    # incoming fades in with a subtle upward rise for a premium feel
-                    $ia = New-Object System.Drawing.Imaging.ImageAttributes
-                    $cm = New-Object System.Drawing.Imaging.ColorMatrix
-                    $cm.Matrix33 = [single]$script:fadeT
-                    $ia.SetColorMatrix($cm)
-                    $dy = [int]((1.0 - $script:fadeT) * 12)
-                    $r1 = New-Object System.Drawing.Rectangle(0, $dy, $s.Width, $s.Height)
-                    $g.DrawImage($script:fadeInBmp, $r1, 0, 0, $script:fadeInBmp.Width, $script:fadeInBmp.Height, [System.Drawing.GraphicsUnit]::Pixel, $ia)
-                    $ia.Dispose()
-                }
-            })
-            $containerPanel.Controls.Add($overlay)
-            $overlay.BringToFront()
-            $script:tabIndicator.BringToFront()
-
-            # 3) prep the incoming panel behind the overlay and snapshot it (no flash)
-            $incoming.Location = New-Object System.Drawing.Point(0, 0)
-            $incoming.Visible = $true
-            $incoming.Refresh()
-            $overlay.BringToFront()
-            $inBmp = New-Object System.Drawing.Bitmap($w, $h)
-            $incoming.DrawToBitmap($inBmp, $rectFull)
-            $script:fadeInBmp = $inBmp
-
-            # 4) animate the blend + indicator (smoothstep ease-in-out, Stopwatch timed)
-            $sw = [System.Diagnostics.Stopwatch]::StartNew()
-            $dur = 300.0
-            while ($true) {
-                $t = $sw.Elapsed.TotalMilliseconds / $dur
-                if ($t -ge 1) { break }
-                $ease = $t * $t * (3.0 - 2.0 * $t)   # smoothstep: gentle in and out
-                $script:fadeT = $ease
-                $overlay.Invalidate()
-                if ($indDelta -ne 0) {
-                    $ix = [int]($indStart + $indDelta * $ease)
-                    $script:tabIndicator.Location = New-Object System.Drawing.Point($ix, 113)
-                }
-                [System.Windows.Forms.Application]::DoEvents()
-                Start-Sleep -Milliseconds 5
-            }
-        }
-        finally {
-            # settle final state and clean up the overlay + bitmaps
-            $incoming.Location = New-Object System.Drawing.Point(0, 0)
-            $incoming.Visible = $true
-            $incoming.BringToFront()
-            $outgoing.Visible = $false
-            $outgoing.Location = New-Object System.Drawing.Point(0, 0)
-            if ($indDelta -ne 0) {
-                $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$indicatorTargetX, 113)
-            }
-            $script:tabIndicator.BringToFront()
-            if ($null -ne $overlay) {
-                try { $containerPanel.Controls.Remove($overlay) } catch {}
-                try { $overlay.Dispose() } catch {}
-            }
-            $script:fadeOutBmp = $null
-            $script:fadeInBmp  = $null
-            if ($null -ne $outBmp) { try { $outBmp.Dispose() } catch {} }
-            if ($null -ne $inBmp)  { try { $inBmp.Dispose() } catch {} }
-            try { $script:animTimer.Start() } catch {}
-            if ($pulseWas) { try { $script:pulseTimer.Start() } catch {} }
         }
     }
 
