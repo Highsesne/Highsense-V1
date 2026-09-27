@@ -73,7 +73,9 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     $bgColor           = [System.Drawing.Color]::FromArgb(18, 18, 18)
     $panelColor        = [System.Drawing.Color]::FromArgb(26, 26, 26)
     $tabBgColor        = [System.Drawing.Color]::FromArgb(35, 35, 35)
-    $tabActiveBg       = [System.Drawing.Color]::FromArgb(48, 48, 48)
+    $tabActiveBg       = [System.Drawing.Color]::FromArgb(26, 33, 44)
+    # Premium azure accent for the category tabs (matches the log / toggle blue)
+    $script:tabAccent  = [System.Drawing.Color]::FromArgb(108, 172, 228)
     $textPrimary       = [System.Drawing.Color]::FromArgb(240, 240, 240)
     $textMuted         = [System.Drawing.Color]::FromArgb(150, 150, 150)
     $btnColor          = [System.Drawing.Color]::FromArgb(32, 32, 32)
@@ -498,7 +500,7 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     $btnTab1.Size = New-Object System.Drawing.Size(248, 32)
     $btnTab1.Location = New-Object System.Drawing.Point(24, 83)
     $btnTab1.BackColor = $tabActiveBg
-    $btnTab1.ForeColor = $textPrimary
+    $btnTab1.ForeColor = $script:tabAccent
     $btnTab1.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnTab1.FlatAppearance.BorderSize = 0
     $btnTab1.Cursor = [System.Windows.Forms.Cursors]::Hand
@@ -522,8 +524,8 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     $script:tabIndicator = New-Object System.Windows.Forms.Panel
     $script:tabIndicator.Size = New-Object System.Drawing.Size(248, 3)
     $script:tabIndicator.Location = New-Object System.Drawing.Point(24, 113)
-    $script:tabIndicator.BackColor = $script:accentColor
-    Set-GlassPanel $script:tabIndicator 3 $script:accentColor 0 0
+    $script:tabIndicator.BackColor = $script:tabAccent
+    Set-GlassPanel $script:tabIndicator 3 $script:tabAccent 0 0
     $form.Controls.Add($script:tabIndicator)
     $script:tabIndicator.BringToFront()
 
@@ -2687,7 +2689,7 @@ Select categories and click Clean Selected.
     $btnTab1.Add_Click({
         if ($script:activeTab -eq 1) { return }
         $btnTab1.BackColor = $tabActiveBg
-        $btnTab1.ForeColor = $textPrimary
+        $btnTab1.ForeColor = $script:tabAccent
         $btnTab2.BackColor = $tabBgColor
         $btnTab2.ForeColor = $textMuted
         # indicator glides in sync with the panel slide (one smooth motion)
@@ -2698,7 +2700,7 @@ Select categories and click Clean Selected.
     $btnTab2.Add_Click({
         if ($script:activeTab -eq 2) { return }
         $btnTab2.BackColor = $tabActiveBg
-        $btnTab2.ForeColor = $textPrimary
+        $btnTab2.ForeColor = $script:tabAccent
         $btnTab1.BackColor = $tabBgColor
         $btnTab1.ForeColor = $textMuted
         # indicator glides in sync with the panel slide (one smooth motion)
