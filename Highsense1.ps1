@@ -522,12 +522,93 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     Set-GlassButton $btnTab2 10
     $form.Controls.Add($btnTab2)
 
-    # Premium: sliding accent indicator under the active tab
+    # Premium: a static full-width strip under the tab row. NOTHING here moves or
+    # resizes - we only repaint (Invalidate) it, so there is zero layout thrash and
+    # no lag. On a tab switch a bright light beam "runs" along the bottom edge from
+    # the previous tab into the newly selected tab and fills its underline (like the
+    # comet on the category cards), then rests as a soft glowing underline. Smooth,
+    # clean, premium.
+    $script:tabIndActive = 1            # which tab currently owns the resting underline
+    $script:tabIndFromTab = 1
+    $script:tabIndToTab   = 1
+    $script:tabIndSw      = $null       # animation stopwatch ($null = idle)
+    $script:tabIndDur     = 460.0       # travel duration (ms)
+    # tab segments in the strip's LOCAL coordinates (strip starts at form x=24)
+    $script:tabSegL1 = 0.0;   $script:tabSegR1 = 248.0
+    $script:tabSegL2 = 254.0; $script:tabSegR2 = 502.0
+
     $script:tabIndicator = New-Object System.Windows.Forms.Panel
-    $script:tabIndicator.Size = New-Object System.Drawing.Size(248, 3)
-    $script:tabIndicator.Location = New-Object System.Drawing.Point(24, 113)
-    $script:tabIndicator.BackColor = $script:tabAccent
-    Set-GlassPanel $script:tabIndicator 3 $script:tabAccent 0 0
+    $script:tabIndicator.Size = New-Object System.Drawing.Size(502, 14)
+    $script:tabIndicator.Location = New-Object System.Drawing.Point(24, 115)
+    $script:tabIndicator.BackColor = $bgColor
+    Set-DoubleBuffered $script:tabIndicator
+    $script:tabIndicator.Add_Paint({
+        param($s, $e)
+        $g = $e.Graphics
+        $g.SmoothingMode   = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        $pc = if ($null -ne $s.Parent) { $s.Parent.BackColor } else { $s.BackColor }
+        $g.Clear($pc)
+
+        $ly = 5.0       # underline vertical position (local)
+        $lh = 2.6       # underline thickness
+        $L1 = $script:tabSegL1; $R1 = $script:tabSegR1
+        $L2 = $script:tabSegL2; $R2 = $script:tabSegR2
+
+        # rounded-cap capsule line from x1..x2
+        $drawSeg = {
+            param($x1, $x2, $alpha)
+            if (($x2 - $x1) -lt 1 -or $alpha -le 0) { return }
+            if ($alpha -gt 255) { $alpha = 255 }
+            $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb([int]$alpha, 248, 250, 253), [single]$lh)
+            $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+            $pen.EndCap   = [System.Drawing.Drawing2D.LineCap]::Round
+            $g.DrawLine($pen, [single]($x1 + $lh / 2.0), [single]$ly, [single]($x2 - $lh / 2.0), [single]$ly)
+            $pen.Dispose()
+        }
+        # soft glowing comet head at position hx (layered ellipses -> bloom)
+        $drawGlow = {
+            param($hx)
+            foreach ($lay in @(@(6.5, 34), @(4.2, 70), @(2.4, 150), @(1.3, 240))) {
+                $r = [double]$lay[0]; $a = [int]$lay[1]
+                $br = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($a, 255, 255, 255))
+                $g.FillEllipse($br, [single]($hx - $r), [single]($ly - $r), [single]($r * 2), [single]($r * 2))
+                $br.Dispose()
+            }
+        }
+
+        if ($null -ne $script:tabIndSw) {
+            $t = $script:tabIndSw.Elapsed.TotalMilliseconds / $script:tabIndDur
+            if ($t -ge 1) { $t = 1 }
+            # ease-in-out cubic -> smooth acceleration then gentle landing
+            if ($t -lt 0.5) { $ez = 4 * $t * $t * $t } else { $ez = 1 - [math]::Pow(-2 * $t + 2, 3) / 2 }
+            $fromTab = $script:tabIndFromTab
+            $toTab   = $script:tabIndToTab
+            if ($fromTab -eq 1) { $oL = $L1; $oR = $R1 } else { $oL = $L2; $oR = $R2 }
+            if ($toTab   -eq 1) { $nL = $L1; $nR = $R1 } else { $nL = $L2; $nR = $R2 }
+            $goingRight = $toTab -gt $fromTab
+            $len = $nR - $nL
+            # previous underline fades out
+            & $drawSeg $oL $oR ([int](200 * (1 - $ez)))
+            # new underline fills in from the edge facing the old tab; comet leads it
+            if ($goingRight) {
+                $fillR = $nL + $len * $ez
+                & $drawSeg $nL $fillR 235
+                $hx = $fillR
+            } else {
+                $fillL = $nR - $len * $ez
+                & $drawSeg $fillL $nR 235
+                $hx = $fillL
+            }
+            # clamp head inside the strip and draw the bloom (dims as it settles)
+            if ($hx -lt 2) { $hx = 2 } elseif ($hx -gt ($s.Width - 2)) { $hx = $s.Width - 2 }
+            & $drawGlow $hx
+        } else {
+            # resting: a soft glowing underline under the active tab
+            if ($script:tabIndActive -eq 1) { $aL = $L1; $aR = $R1 } else { $aL = $L2; $aR = $R2 }
+            & $drawSeg $aL $aR 210
+        }
+    })
     $form.Controls.Add($script:tabIndicator)
     $script:tabIndicator.BringToFront()
 
@@ -719,102 +800,47 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     }
 
     # ===========================================================================
-    # PREMIUM TAB INDICATOR - non-blocking, re-entrant-safe "running line".
-    # The bar is driven by its OWN timer (no Start-Sleep / DoEvents on the click
-    # handler), so switching tabs never freezes or lags, and rapid clicks simply
-    # re-target the glide from wherever the bar currently is. During travel the
-    # leading edge races ahead (ease-out) while the trailing edge lingers
-    # (ease-in), so the line elegantly stretches toward the direction of motion
-    # then settles - a clean, liquid, premium feel that always lands exactly on
-    # the active tab.
+    # PREMIUM TAB INDICATOR driver - non-blocking & re-entrant-safe.
+    # A single lightweight timer just REPAINTS the static strip (no control is
+    # moved or resized), so there is no layout thrash and no lag. The Paint
+    # handler above draws the light beam running from the old tab into the new
+    # tab and filling its underline. Rapid clicks simply retarget instantly.
     # ===========================================================================
-    $script:tabIndY     = 113
-    $script:tabIndBaseW = 248
-    $script:tabIndFrom  = 24.0
-    $script:tabIndTo    = 24.0
-    $script:tabIndDur   = 340.0
-    $script:tabIndSw    = $null
     $script:tabIndTimer = New-Object System.Windows.Forms.Timer
     $script:tabIndTimer.Interval = 15
     $script:tabIndTimer.Add_Tick({
-        if ($null -eq $script:tabIndicator -or $null -eq $script:tabIndSw) {
-            $script:tabIndTimer.Stop(); return
-        }
-        $t = $script:tabIndSw.Elapsed.TotalMilliseconds / $script:tabIndDur
-        if ($t -ge 1) { $t = 1 }
-        $from  = [double]$script:tabIndFrom
-        $to    = [double]$script:tabIndTo
-        $baseW = [double]$script:tabIndBaseW
-        $fromR = $from + $baseW
-        $toR   = $to + $baseW
-        # ease-out-cubic (fast start, soft landing) for the leading edge;
-        # ease-in-cubic (slow start) for the trailing edge => liquid stretch.
-        $easeFast = 1 - [math]::Pow(1 - $t, 3)
-        $easeSlow = $t * $t * $t
-        if ($to -ge $from) {
-            # moving right: right edge leads, left edge trails
-            $rightEdge = $fromR + ($toR - $fromR) * $easeFast
-            $leftEdge  = $from  + ($to  - $from)  * $easeSlow
-        } else {
-            # moving left: left edge leads, right edge trails
-            $leftEdge  = $from  + ($to  - $from)  * $easeFast
-            $rightEdge = $fromR + ($toR - $fromR) * $easeSlow
-        }
-        $x = [int]$leftEdge
-        $w = [int]($rightEdge - $leftEdge)
-        if ($w -lt 8) { $w = 8 }
-        try {
-            $script:tabIndicator.SuspendLayout()
-            $script:tabIndicator.Size     = New-Object System.Drawing.Size($w, 3)
-            $script:tabIndicator.Location  = New-Object System.Drawing.Point($x, $script:tabIndY)
-            $script:tabIndicator.ResumeLayout()
-            $script:tabIndicator.Invalidate()
-        } catch {}
-        if ($t -ge 1) {
-            # snap exactly onto the active tab, restore clean width, stop the timer
-            try {
-                $script:tabIndicator.Size    = New-Object System.Drawing.Size([int]$baseW, 3)
-                $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$to, $script:tabIndY)
-                $script:tabIndicator.Invalidate()
-            } catch {}
+        if ($null -eq $script:tabIndicator) { $script:tabIndTimer.Stop(); return }
+        if ($null -eq $script:tabIndSw) { $script:tabIndTimer.Stop(); return }
+        $script:tabIndicator.Invalidate()
+        if ($script:tabIndSw.Elapsed.TotalMilliseconds -ge $script:tabIndDur) {
+            # animation finished: settle on the active tab and stop repainting
+            $script:tabIndActive = $script:tabIndToTab
             $script:tabIndSw = $null
             $script:tabIndTimer.Stop()
+            $script:tabIndicator.Invalidate()
         }
     })
 
-    # Start (or re-target) the running-line glide toward $targetX. Safe to call
-    # again mid-animation - it just re-anchors from the current position.
-    function Start-TabIndicator($targetX) {
+    # Kick off (or instantly retarget) the running-light beam toward tab #$toTab
+    # (1 = SenseOptimize, 2 = Junk Cleaner). Safe to call mid-animation.
+    function Start-TabIndicator($toTab) {
         if ($null -eq $script:tabIndicator) { return }
-        $script:tabIndFrom = [double]$script:tabIndicator.Location.X
-        $script:tabIndTo   = [double]$targetX
-        if ([math]::Abs($script:tabIndTo - $script:tabIndFrom) -lt 1) {
-            $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$targetX, $script:tabIndY)
+        # start the beam from wherever the underline currently rests
+        if ($null -ne $script:tabIndSw) {
+            # mid-flight: begin the new run from the tab we were heading to
+            $script:tabIndFromTab = $script:tabIndToTab
+        } else {
+            $script:tabIndFromTab = $script:tabIndActive
+        }
+        $script:tabIndToTab = $toTab
+        if ($script:tabIndFromTab -eq $toTab) {
+            $script:tabIndActive = $toTab
+            $script:tabIndSw = $null
+            $script:tabIndicator.Invalidate()
             return
         }
         $script:tabIndSw = [System.Diagnostics.Stopwatch]::StartNew()
         if (-not $script:tabIndTimer.Enabled) { $script:tabIndTimer.Start() }
-    }
-
-    function Move-TabIndicator($targetX) {
-        # Smooth, frame-rate-independent glide (ease-out-cubic). Kept for standalone use;
-        # the tab switch drives the indicator through Switch-Panels for a synced motion.
-        if ($null -eq $script:tabIndicator) { return }
-        $startX = [double]$script:tabIndicator.Location.X
-        $delta  = $targetX - $startX
-        if ([math]::Abs($delta) -lt 1) { return }
-        $sw = [System.Diagnostics.Stopwatch]::StartNew()
-        $dur = 220.0
-        while ($true) {
-            $t = $sw.Elapsed.TotalMilliseconds / $dur
-            if ($t -ge 1) { break }
-            $ease = 1 - [math]::Pow(1 - $t, 3)
-            $x = [int]($startX + $delta * $ease)
-            $script:tabIndicator.Location = New-Object System.Drawing.Point($x, 113)
-            [System.Windows.Forms.Application]::DoEvents()
-            Start-Sleep -Milliseconds 4
-        }
-        $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$targetX, 113)
     }
 
     # Clean, artifact-free tab transition.
@@ -825,7 +851,7 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     # flickers. To keep every rounded corner crisp and avoid any flicker, the content is
     # swapped instantly (no distortion) and the premium motion lives in the accent
     # indicator, which is a small solid bar that glides perfectly smoothly.
-    function Switch-Panels($outgoing, $incoming, $forward, $indicatorTargetX) {
+    function Switch-Panels($outgoing, $incoming, $forward, $targetTab) {
         # instant, pixel-perfect content swap (rounded UI stays crisp, zero flicker)
         $incoming.Location = New-Object System.Drawing.Point(0, 0)
         $incoming.Visible  = $true
@@ -834,12 +860,12 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
         $outgoing.Location = New-Object System.Drawing.Point(0, 0)
         if ($null -ne $script:tabIndicator) { $script:tabIndicator.BringToFront() }
 
-        # Kick off the non-blocking "running line" glide. This returns immediately
-        # (the timer does the animation), so the click handler never blocks and a
-        # rapid second click just re-targets the line - no freezing, no lag, and
-        # the bar always follows through to the selected tab.
-        if ($null -ne $indicatorTargetX) {
-            Start-TabIndicator $indicatorTargetX
+        # Kick off the non-blocking running-light beam. Returns immediately (the
+        # timer only repaints the static strip), so the click handler never blocks
+        # and a rapid second click just retargets the beam - no freezing, no lag,
+        # and the light always follows through into the selected tab.
+        if ($null -ne $targetTab) {
+            Start-TabIndicator $targetTab
         }
     }
 
@@ -2788,8 +2814,8 @@ Select categories and click Clean Selected.
         $btnTab1.ForeColor = $script:tabAccent
         $btnTab2.BackColor = $tabBgColor
         $btnTab2.ForeColor = $textMuted
-        # indicator glides in sync with the panel slide (one smooth motion)
-        Switch-Panels $cleanerContainer $tab1Panel $false 24
+        # light beam runs from the current tab into SenseOptimize and fills it
+        Switch-Panels $cleanerContainer $tab1Panel $false 1
         $script:activeTab = 1
     })
 
@@ -2799,8 +2825,8 @@ Select categories and click Clean Selected.
         $btnTab2.ForeColor = $script:tabAccent
         $btnTab1.BackColor = $tabBgColor
         $btnTab1.ForeColor = $textMuted
-        # indicator glides in sync with the panel slide (one smooth motion)
-        Switch-Panels $tab1Panel $cleanerContainer $true 278
+        # light beam runs from the current tab into Junk Cleaner and fills it
+        Switch-Panels $tab1Panel $cleanerContainer $true 2
         $script:activeTab = 2
     })
 
