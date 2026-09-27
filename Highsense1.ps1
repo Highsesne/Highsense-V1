@@ -83,7 +83,6 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     # Default: aggressive/undocumented tweaks are OFF unless explicitly
     # enabled by the distributor/user after understanding their trade-offs.
     # ===========================================================================
-    $script:enableHags              = $true
     $script:disablePowerThrottling = $false
     $script:disableBackgroundApps  = $false
     $script:forceGameDvrPolicy    = $false
@@ -93,7 +92,6 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     $script:disableHibernation     = $false
     $script:gamesTaskPriority      = $true
     $script:disableMpo             = $false
-    $script:disableMemoryIntegrity = $false
     $script:disableTelemetry       = $false
     $script:ntfsTweaks             = $false
 
@@ -1172,6 +1170,7 @@ function Restore-AllBackups {
     $btnCMD = (Create-CustomButton $tab1Panel "CMD / REG" 24 262 240 38 8.5 {
         $tab1Panel.Enabled = $false; $ErrorActionPreference = 'Stop'
         $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+      try {
 
         Write-ModuleInfo `
             -Module "CMD / REG" `
@@ -1398,11 +1397,15 @@ function Restore-AllBackups {
 
         Write-Log "[SUCCESS] System tuning completed."
         Set-Progress 100
+        Set-ModuleStatus 'CMD' 'APPLIED'
         Start-Sleep -Milliseconds 250
+      } catch {
+        Write-Log "[ERROR] CMD / REG stopped early: $($_.Exception.Message)"
+      } finally {
         Set-Progress 0
-
         $tab1Panel.Enabled = $true
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
+      }
     })
     
     # ---------------------------------------------------------
@@ -1510,6 +1513,7 @@ $btnPowerplan = (Create-CustomButton $tab1Panel "POWERPLAN" 286 262 240 38 8.5 {
         Set-Progress 85
         Write-Log "[POWERPLAN] High-performance power profile is now active."
         Write-Log "[INFO] On laptops this increases heat/battery drain; use Repair to revert."
+        Set-ModuleStatus 'POWERPLAN' 'APPLIED'
         Set-Progress 100
         Start-Sleep -Milliseconds 250
         Set-Progress 0
@@ -1528,6 +1532,7 @@ $btnPowerplan = (Create-CustomButton $tab1Panel "POWERPLAN" 286 262 240 38 8.5 {
 $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
     $tab1Panel.Enabled = $false; $ErrorActionPreference = 'Stop'
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+  try {
 
     Write-ModuleInfo `
         -Module "NET / REG" `
@@ -1672,16 +1677,21 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
 
     Write-Log "[SUCCESS] Network module completed."
     Set-Progress 100
+    Set-ModuleStatus 'NET' 'APPLIED'
     Start-Sleep -Milliseconds 250
+  } catch {
+    Write-Log "[ERROR] NET / REG stopped early: $($_.Exception.Message)"
+  } finally {
     Set-Progress 0
-
     $tab1Panel.Enabled = $true
     $form.Cursor = [System.Windows.Forms.Cursors]::Default
+  }
 })
 
     $btnSystemTweaks = (Create-CustomButton $tab1Panel "SYSTEM TWEAKS" 286 312 240 38 8.5 {
         $tab1Panel.Enabled = $false; $ErrorActionPreference = 'Stop'
         $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+      try {
 
         Write-ModuleInfo `
             -Module "SYSTEM TWEAKS" `
@@ -2073,16 +2083,21 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
 
         Write-Log "[SUCCESS] System tuning applied successfully!"
         Set-Progress 100
+        Set-ModuleStatus 'SYSTEM' 'APPLIED'
         Start-Sleep -Milliseconds 250
+      } catch {
+        Write-Log "[ERROR] SYSTEM TWEAKS stopped early: $($_.Exception.Message)"
+      } finally {
         Set-Progress 0
-
         $tab1Panel.Enabled = $true
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
+      }
     })
 
     $btnInputlag = (Create-CustomButton $tab1Panel "INPUT / REG" 24 368 502 38 8.5 {
     $tab1Panel.Enabled = $false; $ErrorActionPreference = 'Stop'
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
+  try {
 
     Write-ModuleInfo `
         -Module "INPUT / REG" `
@@ -2142,11 +2157,15 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
 
     Write-Log "[SUCCESS] Input module completed."
     Set-Progress 100
+    Set-ModuleStatus 'INPUT' 'APPLIED'
     Start-Sleep -Milliseconds 250
+  } catch {
+    Write-Log "[ERROR] INPUT / REG stopped early: $($_.Exception.Message)"
+  } finally {
     Set-Progress 0
-
     $tab1Panel.Enabled = $true
     $form.Cursor = [System.Windows.Forms.Cursors]::Default
+  }
 })
 
 
@@ -2173,11 +2192,8 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
         $mb.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
     }
 
-    $btnCMD.Add_Click({ Set-ModuleStatus 'CMD' 'APPLIED' })
-    $btnPowerplan.Add_Click({ Set-ModuleStatus 'POWERPLAN' 'APPLIED' })
-    $btnNet.Add_Click({ Set-ModuleStatus 'NET' 'APPLIED' })
-    $btnSystemTweaks.Add_Click({ Set-ModuleStatus 'SYSTEM' 'APPLIED' })
-    $btnInputlag.Add_Click({ Set-ModuleStatus 'INPUT' 'APPLIED' })
+    # Status dots are now set INSIDE each module's success path (only when the
+    # tweak actually finished without a fatal error), not blindly on every click.
     $btnRepair.Add_Click({ Reset-ModuleStatus })
 
     foreach ($k in @('CMD','POWERPLAN','NET','SYSTEM','INPUT')) {
