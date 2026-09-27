@@ -670,37 +670,85 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                     $key = $s.Tag.statusKey
                     if ($key) {
                         $st = $script:moduleStatus[$key]
-                        $d = 7
-                        $cx = $s.Width - 26
-                        $cy = 12
+                        $d = 8
+                        $cx = $s.Width - 27
+                        $cy = 11
                         $ccx = $cx + $d / 2.0
                         $ccy = $cy + $d / 2.0
                         if ($st -eq 'APPLIED') {
-                            # Premium "exposure" pulse: a clean white light that dips to near-dark,
-                            # then flares back brighter than normal. No persistent round glow blob -
-                            # a tight soft bloom only blooms in near the bright peak (over-exposed feel).
-                            $wave = 0.5 - 0.5 * [math]::Cos([double]$script:pulsePhase)
-                            # dot brightness: dips almost dark, peaks at full crisp white
-                            $coreAl = [int](38 + 217 * $wave)
-                            if ($coreAl -gt 255) { $coreAl = 255 }
-                            if ($coreAl -lt 0) { $coreAl = 0 }
-                            # exposure bloom weighted to the peak so the dim phase stays a clean dot
-                            $expo = [math]::Pow($wave, 2.4)
+                            # Holographic sheen dot: an iridescent gradient that slowly rotates,
+                            # with a soft specular streak sweeping across - like the foil on a
+                            # collectible card. Subtle, cool-toned, premium.
+                            $phase = [double]$script:pulsePhase
+                            $twoPi = 6.2831853
+                            # gentle breathing so it feels alive without flashing
+                            $breathe = 0.74 + 0.26 * (0.5 - 0.5 * [math]::Cos($phase))
+
+                            # soft outer bloom in a cool iridescent tint
                             $bloomR = 6
                             $bpath = New-Object System.Drawing.Drawing2D.GraphicsPath
                             $bpath.AddEllipse([single]($ccx - $bloomR), [single]($ccy - $bloomR), [single]($bloomR * 2), [single]($bloomR * 2))
                             $bgb = New-Object System.Drawing.Drawing2D.PathGradientBrush($bpath)
-                            $bloomAl = [int](170 * $expo)
+                            $bloomAl = [int](66 * $breathe)
                             if ($bloomAl -gt 255) { $bloomAl = 255 }
-                            $bgb.CenterColor = [System.Drawing.Color]::FromArgb($bloomAl, 255, 255, 255)
-                            $bgb.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 255, 255, 255))
+                            $bgb.CenterColor = [System.Drawing.Color]::FromArgb($bloomAl, 150, 205, 255)
+                            $bgb.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 150, 205, 255))
                             $bgb.CenterPoint = New-Object System.Drawing.PointF([single]$ccx, [single]$ccy)
                             $e.Graphics.FillPath($bgb, $bpath)
                             $bgb.Dispose(); $bpath.Dispose()
-                            # crisp anti-aliased white core
-                            $cb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($coreAl, 255, 255, 255))
-                            $e.Graphics.FillEllipse($cb, [single]$cx, [single]$cy, [single]$d, [single]$d)
-                            $cb.Dispose()
+
+                            # clip painting to the dot circle so the sheen stays inside
+                            $dotPath = New-Object System.Drawing.Drawing2D.GraphicsPath
+                            $dotPath.AddEllipse([single]$cx, [single]$cy, [single]$d, [single]$d)
+                            $gstate = $e.Graphics.Save()
+                            $e.Graphics.SetClip($dotPath)
+
+                            # iridescent rotating gradient fill
+                            $grect = New-Object System.Drawing.RectangleF([single]($cx - 2), [single]($cy - 2), [single]($d + 4), [single]($d + 4))
+                            $lg = New-Object System.Drawing.Drawing2D.LinearGradientBrush($grect, [System.Drawing.Color]::White, [System.Drawing.Color]::White, [single]0.0)
+                            $ia = [int](205 * $breathe)
+                            if ($ia -gt 255) { $ia = 255 }
+                            $blend = New-Object System.Drawing.Drawing2D.ColorBlend(5)
+                            $blend.Colors = @(
+                                [System.Drawing.Color]::FromArgb($ia, 90, 220, 245),
+                                [System.Drawing.Color]::FromArgb($ia, 130, 150, 255),
+                                [System.Drawing.Color]::FromArgb($ia, 225, 140, 240),
+                                [System.Drawing.Color]::FromArgb($ia, 245, 225, 160),
+                                [System.Drawing.Color]::FromArgb($ia, 90, 220, 245)
+                            )
+                            $blend.Positions = @([single]0.0, [single]0.28, [single]0.55, [single]0.8, [single]1.0)
+                            $lg.InterpolationColors = $blend
+                            $ang = ($phase / $twoPi) * 360.0
+                            $lg.RotateTransform([single]$ang)
+                            $e.Graphics.FillEllipse($lg, [single]$cx, [single]$cy, [single]$d, [single]$d)
+                            $lg.Dispose()
+
+                            # sweeping specular streak (the foil shine)
+                            $sweep = (($phase / $twoPi) * ($d + 6)) - 3
+                            $sx = $cx + $sweep
+                            $streakAl = [int](150 * $breathe)
+                            if ($streakAl -gt 255) { $streakAl = 255 }
+                            $spen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($streakAl, 255, 255, 255), [single]2.0)
+                            $e.Graphics.DrawLine($spen, [single]$sx, [single]($cy - 2), [single]($sx - 3), [single]($cy + $d + 2))
+                            $spen.Dispose()
+
+                            # top-left glass highlight for depth
+                            $hlAl = [int](120 * $breathe)
+                            if ($hlAl -gt 255) { $hlAl = 255 }
+                            $hb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($hlAl, 255, 255, 255))
+                            $e.Graphics.FillEllipse($hb, [single]($cx + 1.6), [single]($cy + 1.3), [single]2.2, [single]2.2)
+                            $hb.Dispose()
+
+                            $e.Graphics.ResetClip()
+                            $e.Graphics.Restore($gstate)
+                            $dotPath.Dispose()
+
+                            # crisp cool rim to define the dot edge
+                            $rimAl = [int](110 * $breathe)
+                            if ($rimAl -gt 255) { $rimAl = 255 }
+                            $rimPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($rimAl, 200, 225, 255), [single]1.0)
+                            $e.Graphics.DrawEllipse($rimPen, [single]$cx, [single]$cy, [single]$d, [single]$d)
+                            $rimPen.Dispose()
                         } else {
                             $pn = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(90, 200, 200, 205), 1.4)
                             $e.Graphics.DrawEllipse($pn, [single]$cx, [single]$cy, [single]$d, [single]$d)
