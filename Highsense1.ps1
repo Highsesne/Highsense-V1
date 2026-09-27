@@ -69,60 +69,6 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     [System.Windows.Forms.Application]::EnableVisualStyles()
     [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
-    # ===========================================================================
-    # BRAND FONT LOADER - use the custom "KREEPY" display font for the HIGHSENSE
-    # logo when it is available. The font file (a .ttf, e.g. KREEPY.ttf) is loaded
-    # privately at runtime via PrivateFontCollection - no system install needed.
-    # We look for it next to the app in a "Fonts" sub-folder (or beside the exe).
-    # If no custom font is found we fall back cleanly to Segoe UI, so the app
-    # always runs. The collection is kept at script scope so the font stays
-    # registered for the whole session.
-    # ===========================================================================
-    $script:pfc            = New-Object System.Drawing.Text.PrivateFontCollection
-    $script:brandFontName  = $null
-    function Load-BrandFont {
-        $dirs = New-Object System.Collections.Generic.List[string]
-        try { $dirs.Add((Split-Path -Parent ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName))) } catch {}
-        if ($PSScriptRoot) { $dirs.Add($PSScriptRoot) }
-        try { $dirs.Add((Get-Location).Path) } catch {}
-        $seen = @{}
-        foreach ($d in $dirs) {
-            if ([string]::IsNullOrWhiteSpace($d) -or $seen.ContainsKey($d)) { continue }
-            $seen[$d] = $true
-            foreach ($sub in @('Fonts', 'fonts', '.')) {
-                $fd = Join-Path $d $sub
-                if (-not (Test-Path -LiteralPath $fd)) { continue }
-                # prefer a file whose name mentions KREEPY, else any .ttf present
-                $ttf = Get-ChildItem -LiteralPath $fd -Filter '*.ttf' -File -ErrorAction SilentlyContinue |
-                       Where-Object { $_.Name -match 'kreepy' } | Select-Object -First 1
-                if (-not $ttf) {
-                    $ttf = Get-ChildItem -LiteralPath $fd -Filter '*.ttf' -File -ErrorAction SilentlyContinue | Select-Object -First 1
-                }
-                if ($ttf) {
-                    try {
-                        $script:pfc.AddFontFile($ttf.FullName)
-                        $script:brandFontName = $script:pfc.Families[$script:pfc.Families.Count - 1].Name
-                        return
-                    } catch {}
-                }
-            }
-        }
-    }
-    Load-BrandFont
-
-    # Build the HIGHSENSE logo font: the custom brand font if we loaded one,
-    # otherwise the original Segoe UI. Decorative families may not carry a Bold
-    # face, so fall back to Regular if Bold throws.
-    function New-BrandFont {
-        param([single]$size)
-        if ($script:brandFontName) {
-            foreach ($st in @([System.Drawing.FontStyle]::Bold, [System.Drawing.FontStyle]::Regular)) {
-                try { return (New-Object System.Drawing.Font($script:brandFontName, $size, $st)) } catch {}
-            }
-        }
-        return (New-Object System.Drawing.Font("Segoe UI", 17, [System.Drawing.FontStyle]::Bold))
-    }
-
     # Color Palette (Dark Theme Modern)
     $bgColor           = [System.Drawing.Color]::FromArgb(18, 18, 18)
     $panelColor        = [System.Drawing.Color]::FromArgb(26, 26, 26)
@@ -445,22 +391,12 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     $headerPanel.Add_MouseUp($stopDrag)
 
     $lblLogo = New-Object System.Windows.Forms.Label
-    if ($script:brandFontName) {
-        # decorative brand font loaded: tighter wordmark + a bit larger so the
-        # custom letterforms read clearly
-        $lblLogo.Text = "HIGHSENSE"
-        $lblLogo.Font = New-BrandFont 26
-        $lblLogo.Size = New-Object System.Drawing.Size(400, 52)
-        $lblLogo.Location = New-Object System.Drawing.Point(15, 4)
-    } else {
-        $lblLogo.Text = "H I G H S E N S E"
-        $lblLogo.Font = New-Object System.Drawing.Font("Segoe UI", 17, [System.Drawing.FontStyle]::Bold)
-        $lblLogo.Size = New-Object System.Drawing.Size(340, 32)
-        $lblLogo.Location = New-Object System.Drawing.Point(15, 8)
-    }
+    $lblLogo.Text = "H I G H S E N S E"
+    $lblLogo.Font = New-Object System.Drawing.Font("Segoe UI", 17, [System.Drawing.FontStyle]::Bold)
     $lblLogo.ForeColor = $textPrimary
+    $lblLogo.Size = New-Object System.Drawing.Size(340, 32)
+    $lblLogo.Location = New-Object System.Drawing.Point(15, 8)
     $lblLogo.TextAlign = [System.Drawing.ContentAlignment]::MiddleLeft
-    $lblLogo.BackColor = [System.Drawing.Color]::Transparent
     $lblLogo.Add_MouseDown($startDrag)
     $lblLogo.Add_MouseMove($doDrag)
     $lblLogo.Add_MouseUp($stopDrag)
