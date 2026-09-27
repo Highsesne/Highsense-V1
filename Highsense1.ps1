@@ -1177,7 +1177,7 @@ function Restore-AllBackups {
             -Module "CMD / REG" `
             -Engine "PowerShell Registry Provider + powercfg.exe" `
             -Scope "HKLM/HKCU gaming and system settings" `
-            -Action "Driver/temp check, HAGS, scheduler, GameDVR, windowed-game optimizations; optional power/security controls" `
+            -Action "Driver/temp check, scheduler, GameDVR, windowed-game optimizations; optional power controls" `
             -Benefit "Reduces selected capture/background work; no web downloads" `
             -Tradeoff "Recording/sync may be reduced; gains vary by workload"
         Write-Log "[CMD / REG] System tuning started..."
@@ -1224,25 +1224,8 @@ function Restore-AllBackups {
 
         try {
             Set-Progress 18
-            $osBuild = 0
-            $mBuild = [regex]::Match($cachedOs, "Build\s+(\d+)")
-            if ($mBuild.Success) { $osBuild = [int]$mBuild.Groups[1].Value }
-            $hagsOsOk = ($osBuild -ge 19041)
-            $hagsGpuOk = ($cachedGpu -notmatch "Microsoft Basic Display Adapter|Unknown GPU")
-            if ($script:enableHags -and $hagsOsOk -and $hagsGpuOk) {
-                Write-Log "[REG] 1/10 Requesting Hardware-Accelerated GPU Scheduling (HAGS)..."
-                $gfxPath = "HKLM:\SYSTEM\CurrentControlSet\Control\GraphicsDrivers"
-                if (!(Test-Path $gfxPath)) { New-Item -Path $gfxPath -Force | Out-Null }
-                Backup-RegValue -Path $gfxPath -Name "HwSchMode"
-                Set-ItemProperty -Path $gfxPath -Name "HwSchMode" -Value 2 -Type DWord
-                Write-Log "       -> OS/GPU prerequisites look plausible; driver support still determines availability."
-            } elseif (-not $hagsOsOk) {
-                Write-Log "[SKIP] 1/10 HAGS request skipped: Windows build is below the supported baseline."
-            } elseif (-not $hagsGpuOk) {
-                Write-Log "[SKIP] 1/10 HAGS request skipped: no supported physical GPU was detected."
-            } else {
-                Write-Log "[SKIP] 1/10 HAGS request disabled in the default profile."
-            }
+            Write-Log "[CHECK] 1/10 Hardware-Accelerated GPU Scheduling (HAGS) is left at the Windows/driver default."
+            Write-Log "       -> HIGHSENSE no longer forces HAGS: it can cause stutter on some GPUs/drivers. Set it in Windows Graphics settings if you want it."
         } catch { Write-Log "[ERROR] Step 1: $($_.Exception.Message)" }
 
         try {
@@ -1378,16 +1361,8 @@ function Restore-AllBackups {
 
         try {
             Set-Progress 99
-            if ($script:disableMemoryIntegrity) {
-                Write-Log "[REG] 10/10 Disabling Memory Integrity / VBS (optional flag = ON)..."
-                $hvciPath = "HKLM:\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity"
-                if (!(Test-Path $hvciPath)) { New-Item -Path $hvciPath -Force | Out-Null }
-                Backup-RegValue -Path $hvciPath -Name "Enabled"
-                Set-ItemProperty -Path $hvciPath -Name "Enabled" -Value 0 -Type DWord
-                Write-Log "       -> Can add a few % FPS in CPU-bound games. TRADE-OFF: lowers kernel security. Reboot required. Reversible via Repair."
-            } else {
-                Write-Log "[SKIP] 10/10 Memory Integrity left ON (security). Enable the flag only if you accept the security trade-off."
-            }
+            Write-Log "[CHECK] 10/10 Memory Integrity / VBS is left ON (Windows default)."
+            Write-Log "       -> HIGHSENSE never disables Memory Integrity: it would lower kernel security for only a few % FPS."
         } catch { Write-Log "[ERROR] Step 10: $($_.Exception.Message)" }
 
         Write-Log "[SUCCESS] System tuning completed."
