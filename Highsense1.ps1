@@ -872,21 +872,31 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
                                 $e.Graphics.DrawLine($basePen, [single]$bx1, [single]$by, [single]$bx2, [single]$by)
                                 $basePen.Dispose()
 
-                                # Premium DUAL sweep: two soft light beams travel along
-                                # the bottom edge in OPPOSITE directions, crossing each other
-                                # in the middle (where they briefly merge into one brighter
-                                # glow) then easing out to the far ends - smooth & luxurious.
-                                $uA = 0.5 + 0.5 * [math]::Sin([double]$script:pulsePhase)
-                                $uB = 1.0 - $uA
-                                $cA = $bx1 + $span * $uA
-                                $cB = $bx1 + $span * $uB
+                                # Premium DUAL orbit: two soft light beams travel along
+                                # the bottom edge in OPPOSITE directions at a steady pace,
+                                # sweep PAST each other, glide all the way to the far ends,
+                                # dissolve, then re-emerge from the other side to sweep past
+                                # again - a continuous, looping cross (no bouncing back).
+                                $fA = [double]$script:pulsePhase / 6.2831853
+                                $fA = $fA - [math]::Floor($fA)
+                                $fB = 1.0 - $fA
+                                $cA = $bx1 + $span * $fA
+                                $cB = $bx1 + $span * $fB
                                 $sigma = $span * 0.16
                                 if ($sigma -lt 1) { $sigma = 1 }
-                                # fade both beams toward the turns so they melt away then return
-                                $edgeA = [math]::Sin([math]::PI * $uA)
-                                $peakA = 130 * [math]::Pow($edgeA, 0.6)
-                                $edgeB = [math]::Sin([math]::PI * $uB)
-                                $peakB = 130 * [math]::Pow($edgeB, 0.6)
+                                # soft fade only right at the two ends so each beam melts out
+                                # at one edge and re-emerges from the other (hides the wrap)
+                                $edgeZone = 0.12
+                                $fadeA = 1.0
+                                if ($fA -lt $edgeZone) { $fadeA = $fA / $edgeZone }
+                                elseif ($fA -gt (1.0 - $edgeZone)) { $fadeA = (1.0 - $fA) / $edgeZone }
+                                $fadeA = $fadeA * $fadeA * (3.0 - 2.0 * $fadeA)
+                                $fadeB = 1.0
+                                if ($fB -lt $edgeZone) { $fadeB = $fB / $edgeZone }
+                                elseif ($fB -gt (1.0 - $edgeZone)) { $fadeB = (1.0 - $fB) / $edgeZone }
+                                $fadeB = $fadeB * $fadeB * (3.0 - 2.0 * $fadeB)
+                                $peakA = 130 * $fadeA
+                                $peakB = 130 * $fadeB
                                 if ($peakA -gt 4 -or $peakB -gt 4) {
                                     $x = $bx1
                                     while ($x -le $bx2) {
