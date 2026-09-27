@@ -665,82 +665,47 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                     $pen.Dispose(); $gp.Dispose()
                 }
 
-                # per-module status: a smooth white light that runs like a wave
-                # around the category frame when applied; a faint static outline when not.
+                # per-module status dot - glowing white when applied, dim ring when not
                 if ($null -ne $s.Tag) {
                     $key = $s.Tag.statusKey
                     if ($key) {
                         $st = $script:moduleStatus[$key]
-                        $rad = 12
-                        $inset = 1.5
-                        $fx = [single]$inset
-                        $fy = [single]$inset
-                        $fw = [single]($s.Width - 1 - 2 * $inset)
-                        $fh = [single]($s.Height - 1 - 2 * $inset)
-                        $fr = New-Object System.Drawing.Drawing2D.GraphicsPath
-                        $fr.AddArc($fx, $fy, [single]$rad, [single]$rad, 180, 90)
-                        $fr.AddArc(($fx + $fw - $rad), $fy, [single]$rad, [single]$rad, 270, 90)
-                        $fr.AddArc(($fx + $fw - $rad), ($fy + $fh - $rad), [single]$rad, [single]$rad, 0, 90)
-                        $fr.AddArc($fx, ($fy + $fh - $rad), [single]$rad, [single]$rad, 90, 90)
-                        $fr.CloseFigure()
-
+                        $d = 7
+                        $cx = $s.Width - 26
+                        $cy = 12
+                        $ccx = $cx + $d / 2.0
+                        $ccy = $cy + $d / 2.0
                         if ($st -eq 'APPLIED') {
-                            # faint always-on base frame so the outline reads softly
-                            $basePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(24, 255, 255, 255), [single]1.0)
-                            $e.Graphics.DrawPath($basePen, $fr)
-                            $basePen.Dispose()
-
-                            # flatten the frame into a polyline so we can walk its perimeter
-                            $flat = $fr.Clone()
-                            $flat.Flatten($null, [single]0.25)
-                            $pts = $flat.PathPoints
-                            $n = $pts.Length
-                            if ($n -gt 2) {
-                                $seg = New-Object 'double[]' $n
-                                $total = 0.0
-                                for ($i = 0; $i -lt $n; $i++) {
-                                    $j = ($i + 1) % $n
-                                    $dx = $pts[$j].X - $pts[$i].X
-                                    $dy = $pts[$j].Y - $pts[$i].Y
-                                    $len = [math]::Sqrt($dx * $dx + $dy * $dy)
-                                    $seg[$i] = $len
-                                    $total += $len
-                                }
-                                if ($total -gt 0) {
-                                    $twoPi = 6.2831853
-                                    $head = ($script:pulsePhase / $twoPi) * $total
-                                    $tailLen = $total * 0.30
-                                    $cum = 0.0
-                                    for ($i = 0; $i -lt $n; $i++) {
-                                        $mid = $cum + $seg[$i] * 0.5
-                                        $back = $head - $mid
-                                        if ($back -lt 0) { $back += $total }
-                                        if ($back -le $tailLen) {
-                                            $t = 1.0 - ($back / $tailLen)
-                                            $al = [int](235 * [math]::Pow($t, 1.6))
-                                            if ($al -gt 255) { $al = 255 }
-                                            if ($al -gt 4) {
-                                                $wdt = [single](1.0 + 1.6 * $t)
-                                                $j = ($i + 1) % $n
-                                                $lp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($al, 255, 255, 255), $wdt)
-                                                $lp.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-                                                $lp.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-                                                $e.Graphics.DrawLine($lp, $pts[$i].X, $pts[$i].Y, $pts[$j].X, $pts[$j].Y)
-                                                $lp.Dispose()
-                                            }
-                                        }
-                                        $cum += $seg[$i]
-                                    }
-                                }
-                            }
-                            $flat.Dispose()
+                            # Premium "exposure" pulse: a clean white light that dips to near-dark,
+                            # then flares back brighter than normal. No persistent round glow blob -
+                            # a tight soft bloom only blooms in near the bright peak (over-exposed feel).
+                            $wave = 0.5 - 0.5 * [math]::Cos([double]$script:pulsePhase)
+                            # dot brightness: dips almost dark, peaks at full crisp white
+                            $coreAl = [int](38 + 217 * $wave)
+                            if ($coreAl -gt 255) { $coreAl = 255 }
+                            if ($coreAl -lt 0) { $coreAl = 0 }
+                            # exposure bloom weighted to the peak so the dim phase stays a clean dot
+                            $expo = [math]::Pow($wave, 2.4)
+                            $bloomR = 6
+                            $bpath = New-Object System.Drawing.Drawing2D.GraphicsPath
+                            $bpath.AddEllipse([single]($ccx - $bloomR), [single]($ccy - $bloomR), [single]($bloomR * 2), [single]($bloomR * 2))
+                            $bgb = New-Object System.Drawing.Drawing2D.PathGradientBrush($bpath)
+                            $bloomAl = [int](170 * $expo)
+                            if ($bloomAl -gt 255) { $bloomAl = 255 }
+                            $bgb.CenterColor = [System.Drawing.Color]::FromArgb($bloomAl, 255, 255, 255)
+                            $bgb.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 255, 255, 255))
+                            $bgb.CenterPoint = New-Object System.Drawing.PointF([single]$ccx, [single]$ccy)
+                            $e.Graphics.FillPath($bgb, $bpath)
+                            $bgb.Dispose(); $bpath.Dispose()
+                            # crisp anti-aliased white core
+                            $cb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($coreAl, 255, 255, 255))
+                            $e.Graphics.FillEllipse($cb, [single]$cx, [single]$cy, [single]$d, [single]$d)
+                            $cb.Dispose()
                         } else {
-                            # not applied: a very faint static frame outline
-                            $offPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(15, 200, 205, 215), [single]1.0)
-                            $e.Graphics.DrawPath($offPen, $fr)
-                            $offPen.Dispose()
+                            $pn = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(90, 200, 200, 205), 1.4)
+                            $e.Graphics.DrawEllipse($pn, [single]$cx, [single]$cy, [single]$d, [single]$d)
+                            $pn.Dispose()
                         }
-                        $fr.Dispose()
                     }
                 }
             } catch {}
