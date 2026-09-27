@@ -666,8 +666,9 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                 }
 
                 # per-module status indicator - premium vertical ACCENT BAR on the LEFT edge.
-                # Applied  = bright capsule that breathes slowly with a soft light-bleed to the right.
-                # Not done = a quiet dim capsule. No round dot / halo blob anymore.
+                # Applied  = steady bright capsule (settles still). A one-shot light SWEEP
+                #            glides across the whole button the moment it turns Applied.
+                # Not done = a quiet dim capsule. No round dot / halo blob.
                 if ($null -ne $s.Tag) {
                     $key = $s.Tag.statusKey
                     if ($key) {
@@ -684,24 +685,8 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                         $cap.CloseFigure()
 
                         if ($st -eq 'APPLIED') {
-                            # slow premium breathing - never fully dark, stays classy
-                            $wave = 0.5 - 0.5 * [math]::Cos([double]$script:pulsePhase)
-
-                            # soft light-bleed to the right, weighted to the breath peak
-                            $glowW = 20.0
-                            $glowAl = [int](55 * [math]::Pow($wave, 2.0))
-                            if ($glowAl -gt 255) { $glowAl = 255 }
-                            if ($glowAl -gt 0) {
-                                $grect = New-Object System.Drawing.RectangleF([single]$barX, [single]($barY - 3), [single]$glowW, [single]($barH + 6))
-                                $lg = New-Object System.Drawing.Drawing2D.LinearGradientBrush($grect, [System.Drawing.Color]::FromArgb($glowAl, 255, 255, 255), [System.Drawing.Color]::FromArgb(0, 255, 255, 255), [single]0.0)
-                                $e.Graphics.FillRectangle($lg, $grect)
-                                $lg.Dispose()
-                            }
-
-                            # bright accent bar, breathing between ~60% and 100%
-                            $barAl = [int](150 + 105 * $wave)
-                            if ($barAl -gt 255) { $barAl = 255 }
-                            $sb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($barAl, 255, 255, 255))
+                            # steady bright bar - no breathing, it just stays lit
+                            $sb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(235, 255, 255, 255))
                             $e.Graphics.FillPath($sb, $cap)
                             $sb.Dispose()
                         } else {
@@ -711,6 +696,24 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                             $sb.Dispose()
                         }
                         $cap.Dispose()
+
+                        # C2 one-shot light SWEEP across the whole button (auto-clipped to the rounded shape)
+                        if ($null -ne $script:sweep -and $script:sweep.ContainsKey($key)) {
+                            $sp = [double]$script:sweep[$key]
+                            $bandW = 48.0
+                            $cxpos = (-0.25 + 1.5 * $sp) * [double]$s.Width
+                            $brect = New-Object System.Drawing.RectangleF([single]($cxpos - $bandW / 2.0), [single](-2), [single]$bandW, [single]($s.Height + 4))
+                            $lg = New-Object System.Drawing.Drawing2D.LinearGradientBrush($brect, [System.Drawing.Color]::White, [System.Drawing.Color]::White, [single]0.0)
+                            $cbld = New-Object System.Drawing.Drawing2D.ColorBlend(3)
+                            $cbld.Colors = @(
+                                [System.Drawing.Color]::FromArgb(0, 255, 255, 255),
+                                [System.Drawing.Color]::FromArgb(80, 255, 255, 255),
+                                [System.Drawing.Color]::FromArgb(0, 255, 255, 255))
+                            $cbld.Positions = @([single]0.0, [single]0.5, [single]1.0)
+                            $lg.InterpolationColors = $cbld
+                            $e.Graphics.FillRectangle($lg, $brect)
+                            $lg.Dispose()
+                        }
                     }
                 }
             } catch {}
@@ -776,7 +779,7 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
         if ($script:moduleButtons.ContainsKey($key)) {
             try { $script:moduleButtons[$key].Invalidate() } catch {}
         }
-        Ensure-PulseTimer
+        if ($state -eq 'APPLIED') { Start-Sweep $key }
     }
 
     function Reset-ModuleStatus {
@@ -805,12 +808,40 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     })
 
     function Ensure-PulseTimer {
+        # Status bars are now steady (no perpetual breathing). Just repaint applied
+        # modules once so their bright accent bar shows after launch. The sweep is a
+        # one-shot effect triggered only when a module turns Applied.
         foreach ($k in @('CMD','POWERPLAN','NET','SYSTEM','INPUT')) {
-            if ($script:moduleStatus[$k] -eq 'APPLIED') {
-                if (-not $script:pulseTimer.Enabled) { $script:pulseTimer.Start() }
-                return
+            if ($script:moduleStatus[$k] -eq 'APPLIED' -and $script:moduleButtons.ContainsKey($k)) {
+                try { $script:moduleButtons[$k].Invalidate() } catch {}
             }
         }
+    }
+
+    # ---- C2: one-shot light SWEEP that glides across a button the moment it turns Applied ----
+    $script:sweep = @{}
+    $script:sweepTimer = New-Object System.Windows.Forms.Timer
+    $script:sweepTimer.Interval = 16
+    $script:sweepTimer.Add_Tick({
+        $active = $false
+        foreach ($k in @($script:sweep.Keys)) {
+            $p = [double]$script:sweep[$k] + 0.06
+            if ($p -ge 1.35) {
+                $script:sweep.Remove($k)
+            } else {
+                $script:sweep[$k] = $p
+                $active = $true
+            }
+            if ($script:moduleButtons.ContainsKey($k)) { try { $script:moduleButtons[$k].Invalidate() } catch {} }
+        }
+        if (-not $active) { $script:sweepTimer.Stop() }
+    })
+
+    function Start-Sweep($key) {
+        if (-not $key) { return }
+        $script:sweep[$key] = 0.0
+        if (-not $script:sweepTimer.Enabled) { $script:sweepTimer.Start() }
+        if ($script:moduleButtons.ContainsKey($key)) { try { $script:moduleButtons[$key].Invalidate() } catch {} }
     }
 
 
