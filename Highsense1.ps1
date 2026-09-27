@@ -665,56 +665,82 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                     $pen.Dispose(); $gp.Dispose()
                 }
 
-                # per-module status: a soft white light that glides back and forth
-                # along ONLY the bottom edge of the category when applied - smooth,
-                # dim, easing at the turns then continuing seamlessly.
+                # per-module status: a smooth white light that runs like a wave
+                # around the category frame when applied; a faint static outline when not.
                 if ($null -ne $s.Tag) {
                     $key = $s.Tag.statusKey
                     if ($key) {
                         $st = $script:moduleStatus[$key]
                         $rad = 12
-                        $by = [double]($s.Height - 2.5)
-                        $bx1 = [double]$rad
-                        $bx2 = [double]($s.Width - $rad)
-                        $span = $bx2 - $bx1
-                        if ($span -gt 4) {
-                            if ($st -eq 'APPLIED') {
-                                # faint always-on base line so the bottom edge reads softly
-                                $basePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(16, 255, 255, 255), [single]1.0)
-                                $e.Graphics.DrawLine($basePen, [single]$bx1, [single]$by, [single]$bx2, [single]$by)
-                                $basePen.Dispose()
+                        $inset = 1.5
+                        $fx = [single]$inset
+                        $fy = [single]$inset
+                        $fw = [single]($s.Width - 1 - 2 * $inset)
+                        $fh = [single]($s.Height - 1 - 2 * $inset)
+                        $fr = New-Object System.Drawing.Drawing2D.GraphicsPath
+                        $fr.AddArc($fx, $fy, [single]$rad, [single]$rad, 180, 90)
+                        $fr.AddArc(($fx + $fw - $rad), $fy, [single]$rad, [single]$rad, 270, 90)
+                        $fr.AddArc(($fx + $fw - $rad), ($fy + $fh - $rad), [single]$rad, [single]$rad, 0, 90)
+                        $fr.AddArc($fx, ($fy + $fh - $rad), [single]$rad, [single]$rad, 90, 90)
+                        $fr.CloseFigure()
 
-                                # smooth ping-pong: sine eases the light at each turn
-                                $u = 0.5 + 0.5 * [math]::Sin([double]$script:pulsePhase)
-                                $c = $bx1 + $span * $u
-                                $sigma = $span * 0.16
-                                if ($sigma -lt 1) { $sigma = 1 }
-                                # fade toward the turns so the light melts away then returns
-                                $edge = [math]::Sin([math]::PI * $u)
-                                $peak = 140 * [math]::Pow($edge, 0.6)
-                                if ($peak -gt 4) {
-                                    $x = $bx1
-                                    while ($x -le $bx2) {
-                                        $dd = ($x - $c) / $sigma
-                                        $al = [int]($peak * [math]::Exp(-($dd * $dd)))
-                                        if ($al -gt 4) {
+                        if ($st -eq 'APPLIED') {
+                            # faint always-on base frame so the outline reads softly
+                            $basePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(24, 255, 255, 255), [single]1.0)
+                            $e.Graphics.DrawPath($basePen, $fr)
+                            $basePen.Dispose()
+
+                            # flatten the frame into a polyline so we can walk its perimeter
+                            $flat = $fr.Clone()
+                            $flat.Flatten($null, [single]0.25)
+                            $pts = $flat.PathPoints
+                            $n = $pts.Length
+                            if ($n -gt 2) {
+                                $seg = New-Object 'double[]' $n
+                                $total = 0.0
+                                for ($i = 0; $i -lt $n; $i++) {
+                                    $j = ($i + 1) % $n
+                                    $dx = $pts[$j].X - $pts[$i].X
+                                    $dy = $pts[$j].Y - $pts[$i].Y
+                                    $len = [math]::Sqrt($dx * $dx + $dy * $dy)
+                                    $seg[$i] = $len
+                                    $total += $len
+                                }
+                                if ($total -gt 0) {
+                                    $twoPi = 6.2831853
+                                    $head = ($script:pulsePhase / $twoPi) * $total
+                                    $tailLen = $total * 0.30
+                                    $cum = 0.0
+                                    for ($i = 0; $i -lt $n; $i++) {
+                                        $mid = $cum + $seg[$i] * 0.5
+                                        $back = $head - $mid
+                                        if ($back -lt 0) { $back += $total }
+                                        if ($back -le $tailLen) {
+                                            $t = 1.0 - ($back / $tailLen)
+                                            $al = [int](235 * [math]::Pow($t, 1.6))
                                             if ($al -gt 255) { $al = 255 }
-                                            $lp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($al, 255, 255, 255), [single]1.6)
-                                            $lp.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-                                            $lp.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-                                            $e.Graphics.DrawLine($lp, [single]$x, [single]$by, [single]($x + 1.8), [single]$by)
-                                            $lp.Dispose()
+                                            if ($al -gt 4) {
+                                                $wdt = [single](1.0 + 1.6 * $t)
+                                                $j = ($i + 1) % $n
+                                                $lp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($al, 255, 255, 255), $wdt)
+                                                $lp.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+                                                $lp.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+                                                $e.Graphics.DrawLine($lp, $pts[$i].X, $pts[$i].Y, $pts[$j].X, $pts[$j].Y)
+                                                $lp.Dispose()
+                                            }
                                         }
-                                        $x += 1.6
+                                        $cum += $seg[$i]
                                     }
                                 }
-                            } else {
-                                # not applied: a very faint static bottom line
-                                $offPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(12, 200, 205, 215), [single]1.0)
-                                $e.Graphics.DrawLine($offPen, [single]$bx1, [single]$by, [single]$bx2, [single]$by)
-                                $offPen.Dispose()
                             }
+                            $flat.Dispose()
+                        } else {
+                            # not applied: a very faint static frame outline
+                            $offPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(15, 200, 205, 215), [single]1.0)
+                            $e.Graphics.DrawPath($offPen, $fr)
+                            $offPen.Dispose()
                         }
+                        $fr.Dispose()
                     }
                 }
             } catch {}
