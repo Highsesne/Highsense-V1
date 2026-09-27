@@ -883,7 +883,7 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
                                 $p = $p - [math]::Floor($p)
                                 # each cycle = one travel sweep, then a ~1.5s dark HOLD where
                                 # both beams stay fully gone before the next sweep begins
-                                $travelFrac = 0.89
+                                $travelFrac = 0.95
                                 $fA = 0.0
                                 $inHold = $true
                                 if ($p -lt $travelFrac) { $fA = $p / $travelFrac; $inHold = $false }
@@ -1017,7 +1017,7 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     $script:pulseTimer = New-Object System.Windows.Forms.Timer
     $script:pulseTimer.Interval = 25
     $script:pulseTimer.Add_Tick({
-        $script:pulsePhase += 0.070
+        $script:pulsePhase += 0.075
         if ($script:pulsePhase -gt 6.2831853) { $script:pulsePhase -= 6.2831853 }
         $any = $false
         foreach ($k in @('CMD','POWERPLAN','NET','SYSTEM','INPUT')) {
