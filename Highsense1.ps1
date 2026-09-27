@@ -83,6 +83,7 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     # Default: aggressive/undocumented tweaks are OFF unless explicitly
     # enabled by the distributor/user after understanding their trade-offs.
     # ===========================================================================
+    $script:enableHags              = $true
     $script:disablePowerThrottling = $false
     $script:disableBackgroundApps  = $false
     $script:forceGameDvrPolicy    = $false
@@ -92,6 +93,7 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     $script:disableHibernation     = $false
     $script:gamesTaskPriority      = $true
     $script:disableMpo             = $false
+    $script:disableMemoryIntegrity = $false
     $script:disableTelemetry       = $false
     $script:ntfsTweaks             = $false
 
@@ -663,47 +665,52 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                     $pen.Dispose(); $gp.Dispose()
                 }
 
-                # per-module status dot - glowing white when applied, dim ring when not
+                # per-module status indicator - premium vertical ACCENT BAR on the LEFT edge.
+                # Applied  = bright capsule that breathes slowly with a soft light-bleed to the right.
+                # Not done = a quiet dim capsule. No round dot / halo blob anymore.
                 if ($null -ne $s.Tag) {
                     $key = $s.Tag.statusKey
                     if ($key) {
                         $st = $script:moduleStatus[$key]
-                        $d = 7
-                        $cx = $s.Width - 26
-                        $cy = 12
-                        $ccx = $cx + $d / 2.0
-                        $ccy = $cy + $d / 2.0
+                        $barW = 3.0
+                        $barX = 6.0
+                        $barH = [double]$s.Height * 0.55
+                        $barY = ([double]$s.Height - $barH) / 2.0
+
+                        # capsule (pill) path for the accent bar - rounded top & bottom caps
+                        $cap = New-Object System.Drawing.Drawing2D.GraphicsPath
+                        $cap.AddArc([single]$barX, [single]$barY, [single]$barW, [single]$barW, 180, 180)
+                        $cap.AddArc([single]$barX, [single]($barY + $barH - $barW), [single]$barW, [single]$barW, 0, 180)
+                        $cap.CloseFigure()
+
                         if ($st -eq 'APPLIED') {
-                            # Premium "exposure" pulse: a clean white light that dips to near-dark,
-                            # then flares back brighter than normal. No persistent round glow blob -
-                            # a tight soft bloom only blooms in near the bright peak (over-exposed feel).
+                            # slow premium breathing - never fully dark, stays classy
                             $wave = 0.5 - 0.5 * [math]::Cos([double]$script:pulsePhase)
-                            # dot brightness: dips almost dark, peaks at full crisp white
-                            $coreAl = [int](38 + 217 * $wave)
-                            if ($coreAl -gt 255) { $coreAl = 255 }
-                            if ($coreAl -lt 0) { $coreAl = 0 }
-                            # exposure bloom weighted to the peak so the dim phase stays a clean dot
-                            $expo = [math]::Pow($wave, 2.4)
-                            $bloomR = 6
-                            $bpath = New-Object System.Drawing.Drawing2D.GraphicsPath
-                            $bpath.AddEllipse([single]($ccx - $bloomR), [single]($ccy - $bloomR), [single]($bloomR * 2), [single]($bloomR * 2))
-                            $bgb = New-Object System.Drawing.Drawing2D.PathGradientBrush($bpath)
-                            $bloomAl = [int](170 * $expo)
-                            if ($bloomAl -gt 255) { $bloomAl = 255 }
-                            $bgb.CenterColor = [System.Drawing.Color]::FromArgb($bloomAl, 255, 255, 255)
-                            $bgb.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 255, 255, 255))
-                            $bgb.CenterPoint = New-Object System.Drawing.PointF([single]$ccx, [single]$ccy)
-                            $e.Graphics.FillPath($bgb, $bpath)
-                            $bgb.Dispose(); $bpath.Dispose()
-                            # crisp anti-aliased white core
-                            $cb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($coreAl, 255, 255, 255))
-                            $e.Graphics.FillEllipse($cb, [single]$cx, [single]$cy, [single]$d, [single]$d)
-                            $cb.Dispose()
+
+                            # soft light-bleed to the right, weighted to the breath peak
+                            $glowW = 20.0
+                            $glowAl = [int](55 * [math]::Pow($wave, 2.0))
+                            if ($glowAl -gt 255) { $glowAl = 255 }
+                            if ($glowAl -gt 0) {
+                                $grect = New-Object System.Drawing.RectangleF([single]$barX, [single]($barY - 3), [single]$glowW, [single]($barH + 6))
+                                $lg = New-Object System.Drawing.Drawing2D.LinearGradientBrush($grect, [System.Drawing.Color]::FromArgb($glowAl, 255, 255, 255), [System.Drawing.Color]::FromArgb(0, 255, 255, 255), [single]0.0)
+                                $e.Graphics.FillRectangle($lg, $grect)
+                                $lg.Dispose()
+                            }
+
+                            # bright accent bar, breathing between ~60% and 100%
+                            $barAl = [int](150 + 105 * $wave)
+                            if ($barAl -gt 255) { $barAl = 255 }
+                            $sb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($barAl, 255, 255, 255))
+                            $e.Graphics.FillPath($sb, $cap)
+                            $sb.Dispose()
                         } else {
-                            $pn = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(90, 200, 200, 205), 1.4)
-                            $e.Graphics.DrawEllipse($pn, [single]$cx, [single]$cy, [single]$d, [single]$d)
-                            $pn.Dispose()
+                            # quiet, static dim bar
+                            $sb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(55, 200, 200, 205))
+                            $e.Graphics.FillPath($sb, $cap)
+                            $sb.Dispose()
                         }
+                        $cap.Dispose()
                     }
                 }
             } catch {}
@@ -1170,7 +1177,6 @@ function Restore-AllBackups {
     $btnCMD = (Create-CustomButton $tab1Panel "CMD / REG" 24 262 240 38 8.5 {
         $tab1Panel.Enabled = $false; $ErrorActionPreference = 'Stop'
         $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
-      try {
 
         Write-ModuleInfo `
             -Module "CMD / REG" `
@@ -1397,15 +1403,11 @@ function Restore-AllBackups {
 
         Write-Log "[SUCCESS] System tuning completed."
         Set-Progress 100
-        Set-ModuleStatus 'CMD' 'APPLIED'
         Start-Sleep -Milliseconds 250
-      } catch {
-        Write-Log "[ERROR] CMD / REG stopped early: $($_.Exception.Message)"
-      } finally {
         Set-Progress 0
+
         $tab1Panel.Enabled = $true
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
-      }
     })
     
     # ---------------------------------------------------------
@@ -1513,7 +1515,6 @@ $btnPowerplan = (Create-CustomButton $tab1Panel "POWERPLAN" 286 262 240 38 8.5 {
         Set-Progress 85
         Write-Log "[POWERPLAN] High-performance power profile is now active."
         Write-Log "[INFO] On laptops this increases heat/battery drain; use Repair to revert."
-        Set-ModuleStatus 'POWERPLAN' 'APPLIED'
         Set-Progress 100
         Start-Sleep -Milliseconds 250
         Set-Progress 0
@@ -1532,7 +1533,6 @@ $btnPowerplan = (Create-CustomButton $tab1Panel "POWERPLAN" 286 262 240 38 8.5 {
 $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
     $tab1Panel.Enabled = $false; $ErrorActionPreference = 'Stop'
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
-  try {
 
     Write-ModuleInfo `
         -Module "NET / REG" `
@@ -1677,21 +1677,16 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
 
     Write-Log "[SUCCESS] Network module completed."
     Set-Progress 100
-    Set-ModuleStatus 'NET' 'APPLIED'
     Start-Sleep -Milliseconds 250
-  } catch {
-    Write-Log "[ERROR] NET / REG stopped early: $($_.Exception.Message)"
-  } finally {
     Set-Progress 0
+
     $tab1Panel.Enabled = $true
     $form.Cursor = [System.Windows.Forms.Cursors]::Default
-  }
 })
 
     $btnSystemTweaks = (Create-CustomButton $tab1Panel "SYSTEM TWEAKS" 286 312 240 38 8.5 {
         $tab1Panel.Enabled = $false; $ErrorActionPreference = 'Stop'
         $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
-      try {
 
         Write-ModuleInfo `
             -Module "SYSTEM TWEAKS" `
@@ -2083,21 +2078,16 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
 
         Write-Log "[SUCCESS] System tuning applied successfully!"
         Set-Progress 100
-        Set-ModuleStatus 'SYSTEM' 'APPLIED'
         Start-Sleep -Milliseconds 250
-      } catch {
-        Write-Log "[ERROR] SYSTEM TWEAKS stopped early: $($_.Exception.Message)"
-      } finally {
         Set-Progress 0
+
         $tab1Panel.Enabled = $true
         $form.Cursor = [System.Windows.Forms.Cursors]::Default
-      }
     })
 
     $btnInputlag = (Create-CustomButton $tab1Panel "INPUT / REG" 24 368 502 38 8.5 {
     $tab1Panel.Enabled = $false; $ErrorActionPreference = 'Stop'
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
-  try {
 
     Write-ModuleInfo `
         -Module "INPUT / REG" `
@@ -2157,15 +2147,11 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
 
     Write-Log "[SUCCESS] Input module completed."
     Set-Progress 100
-    Set-ModuleStatus 'INPUT' 'APPLIED'
     Start-Sleep -Milliseconds 250
-  } catch {
-    Write-Log "[ERROR] INPUT / REG stopped early: $($_.Exception.Message)"
-  } finally {
     Set-Progress 0
+
     $tab1Panel.Enabled = $true
     $form.Cursor = [System.Windows.Forms.Cursors]::Default
-  }
 })
 
 
@@ -2192,8 +2178,11 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
         $mb.Font = New-Object System.Drawing.Font("Segoe UI", 7.5, [System.Drawing.FontStyle]::Bold)
     }
 
-    # Status dots are now set INSIDE each module's success path (only when the
-    # tweak actually finished without a fatal error), not blindly on every click.
+    $btnCMD.Add_Click({ Set-ModuleStatus 'CMD' 'APPLIED' })
+    $btnPowerplan.Add_Click({ Set-ModuleStatus 'POWERPLAN' 'APPLIED' })
+    $btnNet.Add_Click({ Set-ModuleStatus 'NET' 'APPLIED' })
+    $btnSystemTweaks.Add_Click({ Set-ModuleStatus 'SYSTEM' 'APPLIED' })
+    $btnInputlag.Add_Click({ Set-ModuleStatus 'INPUT' 'APPLIED' })
     $btnRepair.Add_Click({ Reset-ModuleStatus })
 
     foreach ($k in @('CMD','POWERPLAN','NET','SYSTEM','INPUT')) {
