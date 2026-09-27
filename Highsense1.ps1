@@ -872,42 +872,55 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
                                 $e.Graphics.DrawLine($basePen, [single]$bx1, [single]$by, [single]$bx2, [single]$by)
                                 $basePen.Dispose()
 
-                                # Premium DUAL orbit: two soft light beams glide at a
-                                # steady pace in OPPOSITE directions - the left beam travels
-                                # all the way to the RIGHT end, the right beam all the way to
-                                # the LEFT end, passing/crossing each other on the way. Motion
-                                # wraps around seamlessly (a beam that reaches one end re-enters
-                                # from the other) so it loops forever with no gap - smooth,
-                                # continuous, luxurious.
-                                $half = $span / 2.0
+                                # Premium DUAL orbit: two comet-like light beams travel the
+                                # bottom edge in OPPOSITE directions - beam A slides left->right,
+                                # beam B slides right->left. Each has a bright head with a soft
+                                # trailing tail (tail points BACKWARD along its own travel), so
+                                # the two clearly PASS THROUGH each other rather than bounce.
+                                # Both fade fully to nothing right at the ends, then re-emerge
+                                # from the start of their travel - a clean, looping cross.
                                 $fA = [double]$script:pulsePhase / 6.2831853
                                 $fA = $fA - [math]::Floor($fA)
                                 $fB = 1.0 - $fA
                                 $cA = $bx1 + $span * $fA
                                 $cB = $bx1 + $span * $fB
-                                $sigma = $span * 0.16
-                                if ($sigma -lt 1) { $sigma = 1 }
-                                $peak = 130
-                                $x = $bx1
-                                while ($x -le $bx2) {
-                                    # wrap each beam's distance into [-half, half] so the glow
-                                    # exits one edge and re-emerges from the other with no seam
-                                    $dA = $x - $cA
-                                    if ($dA -gt $half) { $dA -= $span } elseif ($dA -lt -$half) { $dA += $span }
-                                    $dB = $x - $cB
-                                    if ($dB -gt $half) { $dB -= $span } elseif ($dB -lt -$half) { $dB += $span }
-                                    $ddA = $dA / $sigma
-                                    $ddB = $dB / $sigma
-                                    $al = [int]($peak * [math]::Exp(-($ddA * $ddA)) + $peak * [math]::Exp(-($ddB * $ddB)))
-                                    if ($al -gt 4) {
-                                        if ($al -gt 255) { $al = 255 }
-                                        $lp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($al, 255, 255, 255), [single]1.6)
-                                        $lp.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-                                        $lp.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-                                        $e.Graphics.DrawLine($lp, [single]$x, [single]$by, [single]($x + 1.8), [single]$by)
-                                        $lp.Dispose()
+                                # travel envelope: 0 at both ends (fully vanish), full in middle
+                                $envA = 1.0
+                                if     ($fA -lt 0.20) { $envA = $fA / 0.20 }
+                                elseif ($fA -gt 0.80) { $envA = (1.0 - $fA) / 0.20 }
+                                $envA = $envA * $envA * (3.0 - 2.0 * $envA)
+                                $envB = 1.0
+                                if     ($fB -lt 0.20) { $envB = $fB / 0.20 }
+                                elseif ($fB -gt 0.80) { $envB = (1.0 - $fB) / 0.20 }
+                                $envB = $envB * $envB * (3.0 - 2.0 * $envB)
+                                $sLead = $span * 0.055
+                                $sTail = $span * 0.16
+                                if ($sLead -lt 1) { $sLead = 1 }
+                                if ($sTail -lt 1) { $sTail = 1 }
+                                $peakA = 165 * $envA
+                                $peakB = 165 * $envB
+                                if ($peakA -gt 3 -or $peakB -gt 3) {
+                                    $x = $bx1
+                                    while ($x -le $bx2) {
+                                        # beam A moves RIGHT: sharp head ahead (right), tail left
+                                        $dA = $x - $cA
+                                        if ($dA -gt 0) { $sa = $sLead } else { $sa = $sTail }
+                                        $ra = $dA / $sa
+                                        # beam B moves LEFT: sharp head ahead (left), tail right
+                                        $dB = $x - $cB
+                                        if ($dB -lt 0) { $sb = $sLead } else { $sb = $sTail }
+                                        $rb = $dB / $sb
+                                        $al = [int]($peakA * [math]::Exp(-($ra * $ra)) + $peakB * [math]::Exp(-($rb * $rb)))
+                                        if ($al -gt 3) {
+                                            if ($al -gt 255) { $al = 255 }
+                                            $lp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($al, 255, 255, 255), [single]1.6)
+                                            $lp.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+                                            $lp.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
+                                            $e.Graphics.DrawLine($lp, [single]$x, [single]$by, [single]($x + 1.8), [single]$by)
+                                            $lp.Dispose()
+                                        }
+                                        $x += 1.6
                                     }
-                                    $x += 1.6
                                 }
                             } else {
                                 # not applied: a very faint static bottom line
