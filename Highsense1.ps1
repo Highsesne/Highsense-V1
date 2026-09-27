@@ -55,6 +55,17 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
         }
     } catch {}
 
+    # DWM helper: enables true OS-level (perfectly anti-aliased) rounded window
+    # corners + a subtle border on Windows 11, instead of jagged Region clipping.
+    try {
+        if (-not ('Highsense.Dwm' -as [type])) {
+            Add-Type -Namespace Highsense -Name Dwm -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("dwmapi.dll")]
+public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref int attrValue, int attrSize);
+'@
+        }
+    } catch {}
+
     [System.Windows.Forms.Application]::EnableVisualStyles()
     [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
@@ -175,25 +186,8 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
     $form.MaximizeBox = $false
 
-    # Premium: subtle accent hairline border around the rounded window
-    $form.Add_Paint({
-        param($s, $e)
-        try {
-            $e.Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-            $rad = 16
-            $rr = New-Object System.Drawing.Rectangle(0, 0, ($s.Width - 1), ($s.Height - 1))
-            $gp = New-Object System.Drawing.Drawing2D.GraphicsPath
-            $gp.AddArc($rr.X, $rr.Y, $rad, $rad, 180, 90)
-            $gp.AddArc(($rr.Right - $rad), $rr.Y, $rad, $rad, 270, 90)
-            $gp.AddArc(($rr.Right - $rad), ($rr.Bottom - $rad), $rad, $rad, 0, 90)
-            $gp.AddArc($rr.X, ($rr.Bottom - $rad), $rad, $rad, 90, 90)
-            $gp.CloseFigure()
-            $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(70, $script:accentColor.R, $script:accentColor.G, $script:accentColor.B), 1)
-            $e.Graphics.DrawPath($pen, $gp)
-            $pen.Dispose()
-            $gp.Dispose()
-        } catch {}
-    })
+    # Window corners are rounded by the OS (DWM) below - see $form.Add_Shown -
+    # which yields perfectly smooth, anti-aliased edges (no hand-drawn border needed).
 
     function Set-RoundedControl {
         param($ctrl, $radius)
@@ -211,8 +205,149 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
         } catch {}
     }
 
+    # --- Double-buffering helper (defined early so the glass painters below use it) ---
+    $script:dbProp = [System.Windows.Forms.Control].GetProperty('DoubleBuffered', [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+    function Set-DoubleBuffered($ctrl) {
+        try { if ($script:dbProp) { $script:dbProp.SetValue($ctrl, $true, $null) } } catch {}
+    }
+
+    # Build an anti-aliased rounded-rectangle GraphicsPath ($arc = corner diameter).
+    function New-RoundedPath {
+        param([int]$w, [int]$h, [int]$arc)
+        if ($arc -gt $w) { $arc = $w }
+        if ($arc -gt $h) { $arc = $h }
+        $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+        if ($arc -le 1) {
+            $path.AddRectangle((New-Object System.Drawing.Rectangle(0, 0, $w, $h)))
+            return $path
+        }
+        $path.AddArc(0, 0, $arc, $arc, 180, 90)
+        $path.AddArc(($w - $arc), 0, $arc, $arc, 270, 90)
+        $path.AddArc(($w - $arc), ($h - $arc), $arc, $arc, 0, 90)
+        $path.AddArc(0, ($h - $arc), $arc, $arc, 90, 90)
+        $path.CloseFigure()
+        return $path
+    }
+
+    # Frosted-glass background for a Panel: NO Region clipping (which jags the corners);
+    # instead we paint the parent color into the corners and fill an anti-aliased rounded
+    # rect on top, add a soft top sheen + a hairline light border => clean modern glass.
+    function Set-GlassPanel {
+        param($panel, [int]$arc = 14, $fill, [int]$sheen = 12, [int]$borderAlpha = 46)
+        if ($null -eq $fill) { $fill = $panel.BackColor }
+        Add-Member -InputObject $panel -MemberType NoteProperty -Name GArc -Value $arc -Force
+        Add-Member -InputObject $panel -MemberType NoteProperty -Name GFill -Value $fill -Force
+        Add-Member -InputObject $panel -MemberType NoteProperty -Name GSheen -Value $sheen -Force
+        Add-Member -InputObject $panel -MemberType NoteProperty -Name GBorder -Value $borderAlpha -Force
+        Set-DoubleBuffered $panel
+        $panel.Add_Paint({
+            param($s, $e)
+            $g = $e.Graphics
+            $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+            $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $w = $s.Width; $h = $s.Height
+            $arc = [int]$s.GArc
+            $pc = if ($null -ne $s.Parent) { $s.Parent.BackColor } else { $s.BackColor }
+            $g.Clear($pc)
+            $fill = $s.GFill
+            $sh = [int]$s.GSheen
+            $path = New-RoundedPath ($w - 1) ($h - 1) $arc
+            $topCol = [System.Drawing.Color]::FromArgb(255, [math]::Min(255, $fill.R + $sh), [math]::Min(255, $fill.G + $sh), [math]::Min(255, $fill.B + $sh))
+            $rectF = New-Object System.Drawing.Rectangle(0, 0, $w, $h)
+            $fb = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rectF, $topCol, $fill, [System.Drawing.Drawing2D.LinearGradientMode]::Vertical)
+            $g.FillPath($fb, $path)
+            $fb.Dispose()
+            # frosted top sheen (a faint white highlight fading down over the top half)
+            $shH = [math]::Max(2, [int]($h * 0.5))
+            $shRect = New-Object System.Drawing.Rectangle(0, 0, $w, $shH)
+            $shB = New-Object System.Drawing.Drawing2D.LinearGradientBrush($shRect, [System.Drawing.Color]::FromArgb(24, 255, 255, 255), [System.Drawing.Color]::FromArgb(0, 255, 255, 255), [System.Drawing.Drawing2D.LinearGradientMode]::Vertical)
+            $g.SetClip($path)
+            $g.FillRectangle($shB, $shRect)
+            $g.ResetClip()
+            $shB.Dispose()
+            # hairline glass border
+            $ba = [int]$s.GBorder
+            if ($ba -gt 0) {
+                $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($ba, 255, 255, 255), [single]1)
+                $g.DrawPath($pen, $path)
+                $pen.Dispose()
+            }
+            $path.Dispose()
+        })
+        $panel.Invalidate()
+    }
+
+    # Anti-aliased rounded button (reads its own BackColor as the fill), with a soft
+    # top sheen, a hairline glass border and crisp centered text - no Region, no jaggies.
+    function Set-GlassButton {
+        param($btn, [int]$arc = 10)
+        Add-Member -InputObject $btn -MemberType NoteProperty -Name GArc -Value $arc -Force
+        Set-DoubleBuffered $btn
+        $btn.Add_Paint({
+            param($s, $e)
+            $g = $e.Graphics
+            $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+            $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $w = $s.Width; $h = $s.Height
+            $arc = [int]$s.GArc
+            $pc = if ($null -ne $s.Parent) { $s.Parent.BackColor } else { $s.BackColor }
+            $g.Clear($pc)
+            $fill = $s.BackColor
+            $path = New-RoundedPath ($w - 1) ($h - 1) $arc
+            $topCol = [System.Drawing.Color]::FromArgb(255, [math]::Min(255, $fill.R + 14), [math]::Min(255, $fill.G + 14), [math]::Min(255, $fill.B + 16))
+            $rectF = New-Object System.Drawing.Rectangle(0, 0, $w, $h)
+            $fb = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rectF, $topCol, $fill, [System.Drawing.Drawing2D.LinearGradientMode]::Vertical)
+            $g.FillPath($fb, $path)
+            $fb.Dispose()
+            $shRect = New-Object System.Drawing.Rectangle(0, 0, $w, [math]::Max(2, [int]($h / 2)))
+            $shB = New-Object System.Drawing.Drawing2D.LinearGradientBrush($shRect, [System.Drawing.Color]::FromArgb(22, 255, 255, 255), [System.Drawing.Color]::FromArgb(0, 255, 255, 255), [System.Drawing.Drawing2D.LinearGradientMode]::Vertical)
+            $g.SetClip($path)
+            $g.FillRectangle($shB, $shRect)
+            $g.ResetClip()
+            $shB.Dispose()
+            $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(48, 255, 255, 255), [single]1)
+            $g.DrawPath($pen, $path)
+            $pen.Dispose()
+            $path.Dispose()
+            $tf = [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::SingleLine
+            [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $s.Text, $s.Font, (New-Object System.Drawing.Rectangle(0, 0, $w, $h)), $s.ForeColor, $tf)
+        })
+        $btn.Invalidate()
+    }
+
+    # Wrap a control (e.g. a TextBox, which can't be owner-drawn) inside an
+    # anti-aliased frosted-glass card so it reads as a rounded glass panel with
+    # smooth corners. The inner control is inset so its square corners hide behind
+    # the card's rounded edge.
+    function Wrap-GlassCard {
+        param($ctrl, [int]$arc = 14, [int]$pad = 6, $fill)
+        if ($null -eq $fill) { $fill = [System.Drawing.Color]::FromArgb(30, 30, 34) }
+        $parent = $ctrl.Parent
+        if ($null -eq $parent) { return $null }
+        $loc = $ctrl.Location; $sz = $ctrl.Size
+        $card = New-Object System.Windows.Forms.Panel
+        $card.Location = $loc
+        $card.Size = $sz
+        $card.BackColor = $parent.BackColor
+        $parent.Controls.Add($card)
+        $parent.Controls.Remove($ctrl)
+        $ctrl.Location = New-Object System.Drawing.Point($pad, $pad)
+        $ctrl.Size = New-Object System.Drawing.Size(($sz.Width - $pad * 2), ($sz.Height - $pad * 2))
+        $ctrl.BackColor = $fill
+        $card.Controls.Add($ctrl)
+        Set-GlassPanel $card $arc $fill 12 52
+        return $card
+    }
+
+    # Smooth, OS-level rounded window corners on Windows 11 (perfectly anti-aliased,
+    # no jagged Region clipping) + a subtle window border. Silent no-op on older OS.
     $form.Add_Shown({
-        Set-RoundedControl $form 16
+        try {
+            $pref = 2
+            [void][Highsense.Dwm]::DwmSetWindowAttribute($form.Handle, 33, [ref]$pref, 4)
+            $bcol = 0x3C3C3C
+            [void][Highsense.Dwm]::DwmSetWindowAttribute($form.Handle, 34, [ref]$bcol, 4)
+        } catch {}
     })
 
     $headerPanel = New-Object System.Windows.Forms.Panel
@@ -367,7 +502,7 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     $btnTab1.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnTab1.FlatAppearance.BorderSize = 0
     $btnTab1.Cursor = [System.Windows.Forms.Cursors]::Hand
-    Set-RoundedControl $btnTab1 8
+    Set-GlassButton $btnTab1 10
     $form.Controls.Add($btnTab1)
 
     $btnTab2 = New-Object System.Windows.Forms.Button
@@ -380,7 +515,7 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     $btnTab2.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
     $btnTab2.FlatAppearance.BorderSize = 0
     $btnTab2.Cursor = [System.Windows.Forms.Cursors]::Hand
-    Set-RoundedControl $btnTab2 8
+    Set-GlassButton $btnTab2 10
     $form.Controls.Add($btnTab2)
 
     # Premium: sliding accent indicator under the active tab
@@ -388,7 +523,7 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     $script:tabIndicator.Size = New-Object System.Drawing.Size(248, 3)
     $script:tabIndicator.Location = New-Object System.Drawing.Point(24, 113)
     $script:tabIndicator.BackColor = $script:accentColor
-    Set-RoundedControl $script:tabIndicator 2
+    Set-GlassPanel $script:tabIndicator 3 $script:accentColor 0 0
     $form.Controls.Add($script:tabIndicator)
     $script:tabIndicator.BringToFront()
 
@@ -453,8 +588,8 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
         }
     }
     Render-Log
-    Set-RoundedControl $txtLog 12
     $tab1Panel.Controls.Add($txtLog)
+    [void](Wrap-GlassCard $txtLog 14 6)
 
 
     $pBarBg = New-Object System.Windows.Forms.Panel
@@ -651,8 +786,8 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
         $btn.FlatAppearance.BorderSize = 0
         $btn.Cursor = [System.Windows.Forms.Cursors]::Hand
 
-        # Rounded "pill" shape (corner radius = full height => semicircular ends)
-        Set-RoundedControl $btn $h
+        # Smooth anti-aliased pill (painted, not Region-clipped, so corners stay crisp)
+        Set-DoubleBuffered $btn
 
         $btn.Tag = @{ ctrl = $btn; cur = 0.0; target = 0.0; base = $btnColor; hover = $btnHoverColor }
 
@@ -687,10 +822,14 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                 $botB = [math]::Min(255, $bc.B + [int](26 * $cur))
                 $topCol = [System.Drawing.Color]::FromArgb(255, $topR, $topG, $topB)
                 $botCol = [System.Drawing.Color]::FromArgb(255, $botR, $botG, $botB)
+                $pc = if ($null -ne $s.Parent) { $s.Parent.BackColor } else { $s.BackColor }
+                $e.Graphics.Clear($pc)
+                $bpath = New-RoundedPath ($s.Width - 1) ($s.Height - 1) $s.Height
                 $grRect = New-Object System.Drawing.Rectangle(0, -1, $s.Width, ($s.Height + 2))
                 $bgBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($grRect, $topCol, $botCol, [System.Drawing.Drawing2D.LinearGradientMode]::Vertical)
-                $e.Graphics.FillRectangle($bgBrush, 0, 0, $s.Width, $s.Height)
+                $e.Graphics.FillPath($bgBrush, $bpath)
                 $bgBrush.Dispose()
+                $bpath.Dispose()
                 # re-draw the label on top of the gradient (control text was covered)
                 $tfFlags = [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::SingleLine
                 [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $s.Text, $s.Font, (New-Object System.Drawing.Rectangle(0, 0, $s.Width, $s.Height)), $s.ForeColor, $tfFlags)
@@ -2275,8 +2414,8 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
 ========================================
 Select categories and click Clean Selected.
 "@
-    Set-RoundedControl $txtCleanerLog 12
     $cleanerContainer.Controls.Add($txtCleanerLog)
+    [void](Wrap-GlassCard $txtCleanerLog 14 6)
 
     $pCleanerBarBg = New-Object System.Windows.Forms.Panel
     $pCleanerBarBg.Size = New-Object System.Drawing.Size(502, 6)
