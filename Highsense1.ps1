@@ -1008,9 +1008,9 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     # ---- Smooth looping "twinkle" glow for applied module dots ----
     $script:pulsePhase = 0.0
     $script:pulseTimer = New-Object System.Windows.Forms.Timer
-    $script:pulseTimer.Interval = 33
+    $script:pulseTimer.Interval = 25
     $script:pulseTimer.Add_Tick({
-        $script:pulsePhase += 0.075
+        $script:pulsePhase += 0.079
         if ($script:pulsePhase -gt 6.2831853) { $script:pulsePhase -= 6.2831853 }
         $any = $false
         foreach ($k in @('CMD','POWERPLAN','NET','SYSTEM','INPUT')) {
