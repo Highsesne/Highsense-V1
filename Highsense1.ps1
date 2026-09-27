@@ -637,7 +637,8 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
         $btn.FlatAppearance.BorderSize = 0
         $btn.Cursor = [System.Windows.Forms.Cursors]::Hand
 
-        Set-RoundedControl $btn 12
+        # Rounded "pill" shape (corner radius = full height => semicircular ends)
+        Set-RoundedControl $btn $h
 
         $btn.Tag = @{ ctrl = $btn; cur = 0.0; target = 0.0; base = $btnColor; hover = $btnHoverColor }
 
@@ -655,10 +656,35 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                 $e.Graphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
                 $e.Graphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
 
+                # --- Premium soft gradient fill (clipped to the pill region) ---
+                # A gentle vertical sheen that warms up + gains a soft blue tint as
+                # the hover/press animation rises, so there is no flat, hard edge.
+                $cur = 0.0
+                if ($null -ne $s.Tag -and $null -ne $s.Tag.cur) { $cur = [double]$s.Tag.cur }
+                if ($cur -lt 0) { $cur = 0 } elseif ($cur -gt 1) { $cur = 1 }
+                $bc = $s.BackColor
+                $topAdd  = [int](16 + 26 * $cur)
+                $blueT   = [int](46 * $cur)
+                $topR = [math]::Min(255, $bc.R + $topAdd)
+                $topG = [math]::Min(255, $bc.G + $topAdd + [int](10 * $cur))
+                $topB = [math]::Min(255, $bc.B + $topAdd + $blueT)
+                $botR = [math]::Min(255, $bc.R + [int](4 * $cur))
+                $botG = [math]::Min(255, $bc.G + [int](10 * $cur))
+                $botB = [math]::Min(255, $bc.B + [int](26 * $cur))
+                $topCol = [System.Drawing.Color]::FromArgb(255, $topR, $topG, $topB)
+                $botCol = [System.Drawing.Color]::FromArgb(255, $botR, $botG, $botB)
+                $grRect = New-Object System.Drawing.Rectangle(0, -1, $s.Width, ($s.Height + 2))
+                $bgBrush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($grRect, $topCol, $botCol, [System.Drawing.Drawing2D.LinearGradientMode]::Vertical)
+                $e.Graphics.FillRectangle($bgBrush, 0, 0, $s.Width, $s.Height)
+                $bgBrush.Dispose()
+                # re-draw the label on top of the gradient (control text was covered)
+                $tfFlags = [System.Windows.Forms.TextFormatFlags]::HorizontalCenter -bor [System.Windows.Forms.TextFormatFlags]::VerticalCenter -bor [System.Windows.Forms.TextFormatFlags]::SingleLine
+                [System.Windows.Forms.TextRenderer]::DrawText($e.Graphics, $s.Text, $s.Font, (New-Object System.Drawing.Rectangle(0, 0, $s.Width, $s.Height)), $s.ForeColor, $tfFlags)
+
                 # subtle glowing white edge that fades in/out with the hover animation
                 if ($null -ne $s.Tag -and $s.Tag.cur -gt 0.04) {
                     $al = [int]([math]::Min(1.0, [double]$s.Tag.cur) * 70)
-                    $rad = 12
+                    $rad = $s.Height
                     $rr = New-Object System.Drawing.Rectangle(0, 0, ($s.Width - 1), ($s.Height - 1))
                     $gp = New-Object System.Drawing.Drawing2D.GraphicsPath
                     $gp.AddArc($rr.X, $rr.Y, $rad, $rad, 180, 90)
@@ -678,7 +704,7 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                     $key = $s.Tag.statusKey
                     if ($key) {
                         $st = $script:moduleStatus[$key]
-                        $rad = 12
+                        $rad = $s.Height
                         $by = [double]($s.Height - 2.5)
                         $bx1 = [double]$rad
                         $bx2 = [double]($s.Width - $rad)
@@ -2295,22 +2321,32 @@ Select categories and click Clean Selected.
             $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
             $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
             $p = [double]$s.AnimPos
-            $trackX = 0; $trackY = 5; $trackW = 46; $trackH = 16; $rad = $trackH
-            # track color eases from dark (off) to a soft, dim grey when on (~10-20% brightness)
-            $tc = [int](42 + (92 - 42) * $p)
-            $trackCol = [System.Drawing.Color]::FromArgb(255, $tc, $tc, $tc)
+            $trackX = 0; $trackY = 4; $trackW = 46; $trackH = 18; $rad = $trackH
             $gp = New-Object System.Drawing.Drawing2D.GraphicsPath
             $gp.AddArc($trackX, $trackY, $rad, $rad, 90, 180)
             $gp.AddArc(($trackX + $trackW - $rad), $trackY, $rad, $rad, 270, 180)
             $gp.CloseFigure()
-            $tb = New-Object System.Drawing.SolidBrush($trackCol)
+            # track eases from a dark grey (off) into a soft blue gradient (on) - no hard edge
+            $c1r = [int](42 + (46  - 42) * $p); $c1g = [int](42 + (104 - 42) * $p); $c1b = [int](42 + (168 - 42) * $p)
+            $c2r = [int](42 + (92  - 42) * $p); $c2g = [int](42 + (176 - 42) * $p); $c2b = [int](42 + (248 - 42) * $p)
+            $col1 = [System.Drawing.Color]::FromArgb(255, $c1r, $c1g, $c1b)
+            $col2 = [System.Drawing.Color]::FromArgb(255, $c2r, $c2g, $c2b)
+            $trackRect = New-Object System.Drawing.Rectangle($trackX, ($trackY - 1), $trackW, ($trackH + 2))
+            $tb = New-Object System.Drawing.Drawing2D.LinearGradientBrush($trackRect, $col1, $col2, [System.Drawing.Drawing2D.LinearGradientMode]::Horizontal)
             $g.FillPath($tb, $gp)
-            $tb.Dispose(); $gp.Dispose()
-            # knob slides with an eased position; brighter when on
+            $tb.Dispose()
+            # soft blue sheen along the rim when on (premium glow, fades in smoothly)
+            if ($p -gt 0.02) {
+                $glowPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb([int](70 * $p), 150, 200, 255), [single]1.2)
+                $g.DrawPath($glowPen, $gp)
+                $glowPen.Dispose()
+            }
+            $gp.Dispose()
+            # knob slides with an eased position; clean and bright, brighter when on
             $knobD = 12
-            $knobX = $trackX + 2 + ($trackW - 4 - $knobD) * $p
-            $knobY = $trackY + 2
-            $kc = [int](140 + 50 * $p)
+            $knobX = $trackX + 3 + ($trackW - 6 - $knobD) * $p
+            $knobY = $trackY + 3
+            $kc = [int](170 + 70 * $p)
             if ($kc -gt 255) { $kc = 255 }
             $kb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, $kc, $kc, $kc))
             $g.FillEllipse($kb, [single]$knobX, [single]$knobY, [single]$knobD, [single]$knobD)
