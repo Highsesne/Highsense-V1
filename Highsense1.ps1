@@ -409,7 +409,8 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     $txtLog.ReadOnly = $true
     $txtLog.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
     $txtLog.BackColor = [System.Drawing.Color]::FromArgb(22, 22, 22)
-    $txtLog.ForeColor = [System.Drawing.Color]::LimeGreen
+    # Premium blue log text (base tone; a breathing timer animates the brightness)
+    $txtLog.ForeColor = [System.Drawing.Color]::FromArgb(90, 170, 255)
     $txtLog.Font = New-Object System.Drawing.Font("Consolas", 8.5)
     $txtLog.Size = New-Object System.Drawing.Size(502, 175)
     $txtLog.Location = New-Object System.Drawing.Point(24, 10)
@@ -440,6 +441,27 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     Render-Log
     Set-RoundedControl $txtLog 12
     $tab1Panel.Controls.Add($txtLog)
+
+    # --- Premium "breathing" glow for the Log text (elegant blue pulse) ---
+    # Smoothly eases the blue text between a soft, dim tone and a bright,
+    # luminous azure using a sine curve so it looks like a calm breath.
+    $script:logBreathPhase = 0.0
+    $script:logBreathTimer = New-Object System.Windows.Forms.Timer
+    $script:logBreathTimer.Interval = 40
+    $script:logBreathTimer.Add_Tick({
+        # advance phase; a full breath cycle ~ 2.8s for a relaxed, premium feel
+        $script:logBreathPhase += 0.045
+        if ($script:logBreathPhase -ge [math]::PI * 2) { $script:logBreathPhase -= [math]::PI * 2 }
+        # eased 0..1 value from a sine wave
+        $t = (1 - [math]::Cos($script:logBreathPhase)) / 2
+        # interpolate between a dim navy-blue and a bright azure
+        $r = [int](40  + (120 - 40)  * $t)
+        $g = [int](110 + (195 - 110) * $t)
+        $b = [int](190 + (255 - 190) * $t)
+        if ($r -gt 255) { $r = 255 }; if ($g -gt 255) { $g = 255 }; if ($b -gt 255) { $b = 255 }
+        $txtLog.ForeColor = [System.Drawing.Color]::FromArgb($r, $g, $b)
+    })
+    $script:logBreathTimer.Start()
 
     $pBarBg = New-Object System.Windows.Forms.Panel
     $pBarBg.Size = New-Object System.Drawing.Size(502, 6)
@@ -665,55 +687,46 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
                     $pen.Dispose(); $gp.Dispose()
                 }
 
-                # per-module status: a soft white light that glides back and forth
-                # along ONLY the bottom edge of the category when applied - smooth,
-                # dim, easing at the turns then continuing seamlessly.
+                # per-module status dot - glowing white when applied, dim ring when not
                 if ($null -ne $s.Tag) {
                     $key = $s.Tag.statusKey
                     if ($key) {
                         $st = $script:moduleStatus[$key]
-                        $rad = 12
-                        $by = [double]($s.Height - 2.5)
-                        $bx1 = [double]$rad
-                        $bx2 = [double]($s.Width - $rad)
-                        $span = $bx2 - $bx1
-                        if ($span -gt 4) {
-                            if ($st -eq 'APPLIED') {
-                                # faint always-on base line so the bottom edge reads softly
-                                $basePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(16, 255, 255, 255), [single]1.0)
-                                $e.Graphics.DrawLine($basePen, [single]$bx1, [single]$by, [single]$bx2, [single]$by)
-                                $basePen.Dispose()
-
-                                # smooth ping-pong: sine eases the light at each turn
-                                $u = 0.5 + 0.5 * [math]::Sin([double]$script:pulsePhase)
-                                $c = $bx1 + $span * $u
-                                $sigma = $span * 0.16
-                                if ($sigma -lt 1) { $sigma = 1 }
-                                # fade toward the turns so the light melts away then returns
-                                $edge = [math]::Sin([math]::PI * $u)
-                                $peak = 140 * [math]::Pow($edge, 0.6)
-                                if ($peak -gt 4) {
-                                    $x = $bx1
-                                    while ($x -le $bx2) {
-                                        $dd = ($x - $c) / $sigma
-                                        $al = [int]($peak * [math]::Exp(-($dd * $dd)))
-                                        if ($al -gt 4) {
-                                            if ($al -gt 255) { $al = 255 }
-                                            $lp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($al, 255, 255, 255), [single]1.6)
-                                            $lp.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-                                            $lp.EndCap = [System.Drawing.Drawing2D.LineCap]::Round
-                                            $e.Graphics.DrawLine($lp, [single]$x, [single]$by, [single]($x + 1.8), [single]$by)
-                                            $lp.Dispose()
-                                        }
-                                        $x += 1.6
-                                    }
-                                }
-                            } else {
-                                # not applied: a very faint static bottom line
-                                $offPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(12, 200, 205, 215), [single]1.0)
-                                $e.Graphics.DrawLine($offPen, [single]$bx1, [single]$by, [single]$bx2, [single]$by)
-                                $offPen.Dispose()
-                            }
+                        $d = 7
+                        $cx = $s.Width - 26
+                        $cy = 12
+                        $ccx = $cx + $d / 2.0
+                        $ccy = $cy + $d / 2.0
+                        if ($st -eq 'APPLIED') {
+                            # Premium "exposure" pulse: a clean white light that dips to near-dark,
+                            # then flares back brighter than normal. No persistent round glow blob -
+                            # a tight soft bloom only blooms in near the bright peak (over-exposed feel).
+                            $wave = 0.5 - 0.5 * [math]::Cos([double]$script:pulsePhase)
+                            # dot brightness: dips almost dark, peaks at full crisp white
+                            $coreAl = [int](38 + 217 * $wave)
+                            if ($coreAl -gt 255) { $coreAl = 255 }
+                            if ($coreAl -lt 0) { $coreAl = 0 }
+                            # exposure bloom weighted to the peak so the dim phase stays a clean dot
+                            $expo = [math]::Pow($wave, 2.4)
+                            $bloomR = 6
+                            $bpath = New-Object System.Drawing.Drawing2D.GraphicsPath
+                            $bpath.AddEllipse([single]($ccx - $bloomR), [single]($ccy - $bloomR), [single]($bloomR * 2), [single]($bloomR * 2))
+                            $bgb = New-Object System.Drawing.Drawing2D.PathGradientBrush($bpath)
+                            $bloomAl = [int](170 * $expo)
+                            if ($bloomAl -gt 255) { $bloomAl = 255 }
+                            $bgb.CenterColor = [System.Drawing.Color]::FromArgb($bloomAl, 255, 255, 255)
+                            $bgb.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 255, 255, 255))
+                            $bgb.CenterPoint = New-Object System.Drawing.PointF([single]$ccx, [single]$ccy)
+                            $e.Graphics.FillPath($bgb, $bpath)
+                            $bgb.Dispose(); $bpath.Dispose()
+                            # crisp anti-aliased white core
+                            $cb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($coreAl, 255, 255, 255))
+                            $e.Graphics.FillEllipse($cb, [single]$cx, [single]$cy, [single]$d, [single]$d)
+                            $cb.Dispose()
+                        } else {
+                            $pn = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb(90, 200, 200, 205), 1.4)
+                            $e.Graphics.DrawEllipse($pn, [single]$cx, [single]$cy, [single]$d, [single]$d)
+                            $pn.Dispose()
                         }
                     }
                 }
