@@ -392,17 +392,27 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     $form.Controls.Add($script:tabIndicator)
     $script:tabIndicator.BringToFront()
 
+    # Enable double-buffering on containers so the tab-switch slide repaints in one
+    # smooth pass (no tearing/jank while the panels glide). Uses the protected
+    # DoubleBuffered property via reflection - safe and standard for WinForms.
+    $script:dbProp = [System.Windows.Forms.Control].GetProperty('DoubleBuffered', [System.Reflection.BindingFlags]::Instance -bor [System.Reflection.BindingFlags]::NonPublic)
+    function Set-DoubleBuffered($ctrl) {
+        try { if ($script:dbProp) { $script:dbProp.SetValue($ctrl, $true, $null) } } catch {}
+    }
+
     $containerPanel = New-Object System.Windows.Forms.Panel
     $containerPanel.Size = New-Object System.Drawing.Size(550, 480)
     $containerPanel.Location = New-Object System.Drawing.Point(0, 123)
     $containerPanel.BackColor = $bgColor
     $form.Controls.Add($containerPanel)
+    Set-DoubleBuffered $containerPanel
 
     $tab1Panel = New-Object System.Windows.Forms.Panel
     $tab1Panel.Size = New-Object System.Drawing.Size(550, 480)
     $tab1Panel.Location = New-Object System.Drawing.Point(0, 0)
     $tab1Panel.BackColor = $bgColor
     $containerPanel.Controls.Add($tab1Panel)
+    Set-DoubleBuffered $tab1Panel
 
     $txtLog = New-Object System.Windows.Forms.TextBox
     $txtLog.Multiline = $true
@@ -570,56 +580,78 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     }
 
     function Move-TabIndicator($targetX) {
+        # Smooth, frame-rate-independent glide (ease-out-cubic). Kept for standalone use;
+        # the tab switch drives the indicator through Switch-Panels for a synced motion.
         if ($null -eq $script:tabIndicator) { return }
-        $cur = $script:tabIndicator.Location.X
-        $stepc = if ($targetX -gt $cur) { 24 } else { -24 }
-        while (($stepc -gt 0 -and $cur -lt $targetX) -or ($stepc -lt 0 -and $cur -gt $targetX)) {
-            $cur += $stepc
-            if (($stepc -gt 0 -and $cur -gt $targetX) -or ($stepc -lt 0 -and $cur -lt $targetX)) { $cur = $targetX }
-            $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$cur, 113)
-            $script:tabIndicator.Refresh()
+        $startX = [double]$script:tabIndicator.Location.X
+        $delta  = $targetX - $startX
+        if ([math]::Abs($delta) -lt 1) { return }
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $dur = 220.0
+        while ($true) {
+            $t = $sw.Elapsed.TotalMilliseconds / $dur
+            if ($t -ge 1) { break }
+            $ease = 1 - [math]::Pow(1 - $t, 3)
+            $x = [int]($startX + $delta * $ease)
+            $script:tabIndicator.Location = New-Object System.Drawing.Point($x, 113)
             [System.Windows.Forms.Application]::DoEvents()
-            Start-Sleep -Milliseconds 6
+            Start-Sleep -Milliseconds 4
         }
+        $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$targetX, 113)
     }
 
-    # Premium vertical "spring" transition between tab panels (ease-out-back settle, no bitmap = no lag).
-    # Incoming panel glides in vertically with a soft overshoot; competing repaint timers pause for smoothness.
-    function Switch-Panels($outgoing, $incoming, $forward) {
+    # Premium synchronized tab transition: the incoming panel glides in vertically
+    # while the accent indicator slides across - both driven by one ease-out-cubic
+    # curve on a Stopwatch, so the motion is smooth and consistent on any machine
+    # (no fixed step count = no jank/lag). Double-buffered containers keep it clean.
+    function Switch-Panels($outgoing, $incoming, $forward, $indicatorTargetX) {
         $h = $outgoing.Height
         if ($h -le 0) {
             $incoming.Location = New-Object System.Drawing.Point(0, 0)
             $incoming.Visible = $true; $incoming.BringToFront(); $outgoing.Visible = $false
+            if ($null -ne $indicatorTargetX -and $null -ne $script:tabIndicator) {
+                $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$indicatorTargetX, 113)
+            }
             return
         }
         $pulseWas = $false
         try { $pulseWas = $script:pulseTimer.Enabled } catch {}
         try { $script:pulseTimer.Stop() } catch {}
         try { $script:animTimer.Stop() } catch {}
+
         if ($forward) { $inStart = $h; $outEnd = -$h } else { $inStart = -$h; $outEnd = $h }
         $incoming.Location = New-Object System.Drawing.Point(0, [int]$inStart)
         $incoming.Visible = $true
         $incoming.BringToFront()
-        $c1 = 0.9
-        $c3 = $c1 + 1.0
-        $steps = 22
-        for ($i = 1; $i -le $steps; $i++) {
-            $t = $i / $steps
-            # incoming: ease-out-back (glides in then gently settles with a soft overshoot)
-            $tb = $t - 1.0
-            $easeIn = 1.0 + $c3 * $tb * $tb * $tb + $c1 * $tb * $tb
-            # outgoing: ease-in cubic (accelerates away)
-            $easeOut = $t * $t * $t
-            $inY = [int]($inStart * (1.0 - $easeIn))
-            $outY = [int]($outEnd * $easeOut)
+        $script:tabIndicator.BringToFront()
+
+        $indStart = if ($null -ne $script:tabIndicator) { [double]$script:tabIndicator.Location.X } else { 0.0 }
+        $indDelta = if ($null -ne $indicatorTargetX) { $indicatorTargetX - $indStart } else { 0.0 }
+
+        $sw = [System.Diagnostics.Stopwatch]::StartNew()
+        $dur = 260.0
+        while ($true) {
+            $t = $sw.Elapsed.TotalMilliseconds / $dur
+            if ($t -ge 1) { break }
+            # ease-out-cubic: quick, confident start that settles softly (no overshoot = premium, not laggy)
+            $ease = 1 - [math]::Pow(1 - $t, 3)
+            $inY  = [int]($inStart * (1.0 - $ease))
+            $outY = [int]($outEnd * $ease)
             $incoming.Location = New-Object System.Drawing.Point(0, $inY)
             $outgoing.Location = New-Object System.Drawing.Point(0, $outY)
+            if ($indDelta -ne 0) {
+                $ix = [int]($indStart + $indDelta * $ease)
+                $script:tabIndicator.Location = New-Object System.Drawing.Point($ix, 113)
+            }
             [System.Windows.Forms.Application]::DoEvents()
-            Start-Sleep -Milliseconds 7
+            Start-Sleep -Milliseconds 4
         }
         $incoming.Location = New-Object System.Drawing.Point(0, 0)
         $outgoing.Visible = $false
         $outgoing.Location = New-Object System.Drawing.Point(0, 0)
+        if ($indDelta -ne 0) {
+            $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$indicatorTargetX, 113)
+        }
         try { $script:animTimer.Start() } catch {}
         if ($pulseWas) { try { $script:pulseTimer.Start() } catch {} }
     }
@@ -2242,6 +2274,7 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
     $cleanerContainer.BackColor = $bgColor
     $cleanerContainer.Visible = $false
     $containerPanel.Controls.Add($cleanerContainer)
+    Set-DoubleBuffered $cleanerContainer
 
     $txtCleanerLog = New-Object System.Windows.Forms.TextBox
     $txtCleanerLog.Multiline = $true
@@ -2536,8 +2569,8 @@ Select categories and click Clean Selected.
         $btnTab1.ForeColor = $textPrimary
         $btnTab2.BackColor = $tabBgColor
         $btnTab2.ForeColor = $textMuted
-        Move-TabIndicator 24
-        Switch-Panels $cleanerContainer $tab1Panel $false
+        # indicator glides in sync with the panel slide (one smooth motion)
+        Switch-Panels $cleanerContainer $tab1Panel $false 24
         $script:activeTab = 1
     })
 
@@ -2547,8 +2580,8 @@ Select categories and click Clean Selected.
         $btnTab2.ForeColor = $textPrimary
         $btnTab1.BackColor = $tabBgColor
         $btnTab1.ForeColor = $textMuted
-        Move-TabIndicator 278
-        Switch-Panels $tab1Panel $cleanerContainer $true
+        # indicator glides in sync with the panel slide (one smooth motion)
+        Switch-Panels $tab1Panel $cleanerContainer $true 278
         $script:activeTab = 2
     })
 
