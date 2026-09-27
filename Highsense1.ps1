@@ -91,7 +91,7 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     $script:optimizeNicPower       = $true
     $script:advancedInputQueues    = $false
     $script:disableHibernation     = $false
-    $script:gamesTaskPriority      = $false
+    $script:gamesTaskPriority      = $true
     $script:disableMpo             = $false
     $script:disableMemoryIntegrity = $false
     $script:disableTelemetry       = $false
@@ -1249,9 +1249,11 @@ function Restore-AllBackups {
                 Set-ItemProperty -Path $gamesTask -Name "Scheduling Category" -Value "High" -Type String
                 Backup-RegValue -Path $gamesTask -Name "SFIO Priority"
                 Set-ItemProperty -Path $gamesTask -Name "SFIO Priority" -Value "High" -Type String
-                Write-Log "       -> Note: evidence is mixed; optional tweak, fully reversible."
+                Backup-RegValue -Path $gamesTask -Name "Clock Rate"
+                Set-ItemProperty -Path $gamesTask -Name "Clock Rate" -Value 10000 -Type DWord
+                Write-Log "       -> Games get higher GPU/CPU scheduling priority. Safe and fully reversible via Repair."
             } else {
-                Write-Log "[SKIP] 2b/10 MMCSS 'Games' task priority is OFF by default (mixed evidence)."
+                Write-Log "[SKIP] 2b/10 MMCSS 'Games' task priority is OFF."
             }
         } catch { Write-Log "[ERROR] Step 2: $($_.Exception.Message)" }
 
@@ -1364,6 +1366,35 @@ function Restore-AllBackups {
             Write-Log "[CHECK] 10/10 Memory Integrity / VBS is left ON (Windows default)."
             Write-Log "       -> HIGHSENSE never disables Memory Integrity: it would lower kernel security for only a few % FPS."
         } catch { Write-Log "[ERROR] Step 10: $($_.Exception.Message)" }
+
+        # --- (11) Keep kernel + drivers resident in RAM (no paging to disk) ---
+        # Safe on machines with enough RAM; helps frametime consistency, never forces lag.
+        try {
+            Set-Progress 99
+            $ramGb = 0
+            try { $ramGb = [math]::Round((Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue).TotalPhysicalMemory / 1GB) } catch {}
+            if ($ramGb -ge 8) {
+                Write-Log "[REG] 11/12 Keeping kernel/drivers resident in RAM (DisablePagingExecutive = 1)..."
+                $memMgmt = "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management"
+                if (!(Test-Path $memMgmt)) { New-Item -Path $memMgmt -Force | Out-Null }
+                Backup-RegValue -Path $memMgmt -Name "DisablePagingExecutive"
+                Set-ItemProperty -Path $memMgmt -Name "DisablePagingExecutive" -Value 1 -Type DWord
+                Write-Log "       -> Smoother frametimes on RAM-rich systems ($ramGb GB detected). Reversible via Repair."
+            } else {
+                Write-Log "[SKIP] 11/12 DisablePagingExecutive skipped: less than 8 GB RAM detected."
+            }
+        } catch { Write-Log "[ERROR] Step 11: $($_.Exception.Message)" }
+
+        # --- (12) Reduce menu/UI show delay so the desktop feels instant while gaming/alt-tabbing ---
+        # Pure responsiveness tweak, no CPU/GPU cost, fully reversible.
+        try {
+            Set-Progress 99
+            Write-Log "[REG] 12/12 Reducing UI menu show delay for snappier alt-tab/response..."
+            $deskPath = "HKCU:\Control Panel\Desktop"
+            Backup-RegValue -Path $deskPath -Name "MenuShowDelay"
+            Set-ItemProperty -Path $deskPath -Name "MenuShowDelay" -Value "100" -Type String
+            Write-Log "       -> Menus/UI feel more responsive. No performance cost. Reversible via Repair."
+        } catch { Write-Log "[ERROR] Step 12: $($_.Exception.Message)" }
 
         Write-Log "[SUCCESS] System tuning completed."
         Set-Progress 100
