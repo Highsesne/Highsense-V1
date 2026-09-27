@@ -409,7 +409,8 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     $txtLog.ReadOnly = $true
     $txtLog.ScrollBars = [System.Windows.Forms.ScrollBars]::Vertical
     $txtLog.BackColor = [System.Drawing.Color]::FromArgb(22, 22, 22)
-    $txtLog.ForeColor = [System.Drawing.Color]::LimeGreen
+    # Premium blue log text (base tone; a breathing/shimmer timer animates the glow)
+    $txtLog.ForeColor = [System.Drawing.Color]::FromArgb(90, 170, 255)
     $txtLog.Font = New-Object System.Drawing.Font("Consolas", 8.5)
     $txtLog.Size = New-Object System.Drawing.Size(502, 175)
     $txtLog.Location = New-Object System.Drawing.Point(24, 10)
@@ -440,6 +441,27 @@ public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
     Render-Log
     Set-RoundedControl $txtLog 12
     $tab1Panel.Controls.Add($txtLog)
+
+    # --- Premium "shimmer / breathing" glow for the Log text (smooth blue pulse) ---
+    # Eases the blue text between a soft dim navy and a bright luminous azure using
+    # a sine curve, so it looks like a calm, elegant shimmer that is easy on the eyes.
+    $script:logBreathPhase = 0.0
+    $script:logBreathTimer = New-Object System.Windows.Forms.Timer
+    $script:logBreathTimer.Interval = 33
+    $script:logBreathTimer.Add_Tick({
+        # advance phase; a full breath cycle ~ 3s for a relaxed, premium feel
+        $script:logBreathPhase += 0.035
+        if ($script:logBreathPhase -ge [math]::PI * 2) { $script:logBreathPhase -= [math]::PI * 2 }
+        # eased 0..1 value from a sine wave (smooth in/out)
+        $t = (1 - [math]::Cos($script:logBreathPhase)) / 2
+        # interpolate between a dim navy-blue and a bright azure
+        $r = [int](45  + (130 - 45)  * $t)
+        $g = [int](115 + (200 - 115) * $t)
+        $b = [int](195 + (255 - 195) * $t)
+        if ($r -gt 255) { $r = 255 }; if ($g -gt 255) { $g = 255 }; if ($b -gt 255) { $b = 255 }
+        $txtLog.ForeColor = [System.Drawing.Color]::FromArgb($r, $g, $b)
+    })
+    $script:logBreathTimer.Start()
 
     $pBarBg = New-Object System.Windows.Forms.Panel
     $pBarBg.Size = New-Object System.Drawing.Size(502, 6)
