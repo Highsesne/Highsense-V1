@@ -718,6 +718,84 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
         if (-not $script:animTimer.Enabled) { $script:animTimer.Start() }
     }
 
+    # ===========================================================================
+    # PREMIUM TAB INDICATOR - non-blocking, re-entrant-safe "running line".
+    # The bar is driven by its OWN timer (no Start-Sleep / DoEvents on the click
+    # handler), so switching tabs never freezes or lags, and rapid clicks simply
+    # re-target the glide from wherever the bar currently is. During travel the
+    # leading edge races ahead (ease-out) while the trailing edge lingers
+    # (ease-in), so the line elegantly stretches toward the direction of motion
+    # then settles - a clean, liquid, premium feel that always lands exactly on
+    # the active tab.
+    # ===========================================================================
+    $script:tabIndY     = 113
+    $script:tabIndBaseW = 248
+    $script:tabIndFrom  = 24.0
+    $script:tabIndTo    = 24.0
+    $script:tabIndDur   = 340.0
+    $script:tabIndSw    = $null
+    $script:tabIndTimer = New-Object System.Windows.Forms.Timer
+    $script:tabIndTimer.Interval = 15
+    $script:tabIndTimer.Add_Tick({
+        if ($null -eq $script:tabIndicator -or $null -eq $script:tabIndSw) {
+            $script:tabIndTimer.Stop(); return
+        }
+        $t = $script:tabIndSw.Elapsed.TotalMilliseconds / $script:tabIndDur
+        if ($t -ge 1) { $t = 1 }
+        $from  = [double]$script:tabIndFrom
+        $to    = [double]$script:tabIndTo
+        $baseW = [double]$script:tabIndBaseW
+        $fromR = $from + $baseW
+        $toR   = $to + $baseW
+        # ease-out-cubic (fast start, soft landing) for the leading edge;
+        # ease-in-cubic (slow start) for the trailing edge => liquid stretch.
+        $easeFast = 1 - [math]::Pow(1 - $t, 3)
+        $easeSlow = $t * $t * $t
+        if ($to -ge $from) {
+            # moving right: right edge leads, left edge trails
+            $rightEdge = $fromR + ($toR - $fromR) * $easeFast
+            $leftEdge  = $from  + ($to  - $from)  * $easeSlow
+        } else {
+            # moving left: left edge leads, right edge trails
+            $leftEdge  = $from  + ($to  - $from)  * $easeFast
+            $rightEdge = $fromR + ($toR - $fromR) * $easeSlow
+        }
+        $x = [int]$leftEdge
+        $w = [int]($rightEdge - $leftEdge)
+        if ($w -lt 8) { $w = 8 }
+        try {
+            $script:tabIndicator.SuspendLayout()
+            $script:tabIndicator.Size     = New-Object System.Drawing.Size($w, 3)
+            $script:tabIndicator.Location  = New-Object System.Drawing.Point($x, $script:tabIndY)
+            $script:tabIndicator.ResumeLayout()
+            $script:tabIndicator.Invalidate()
+        } catch {}
+        if ($t -ge 1) {
+            # snap exactly onto the active tab, restore clean width, stop the timer
+            try {
+                $script:tabIndicator.Size    = New-Object System.Drawing.Size([int]$baseW, 3)
+                $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$to, $script:tabIndY)
+                $script:tabIndicator.Invalidate()
+            } catch {}
+            $script:tabIndSw = $null
+            $script:tabIndTimer.Stop()
+        }
+    })
+
+    # Start (or re-target) the running-line glide toward $targetX. Safe to call
+    # again mid-animation - it just re-anchors from the current position.
+    function Start-TabIndicator($targetX) {
+        if ($null -eq $script:tabIndicator) { return }
+        $script:tabIndFrom = [double]$script:tabIndicator.Location.X
+        $script:tabIndTo   = [double]$targetX
+        if ([math]::Abs($script:tabIndTo - $script:tabIndFrom) -lt 1) {
+            $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$targetX, $script:tabIndY)
+            return
+        }
+        $script:tabIndSw = [System.Diagnostics.Stopwatch]::StartNew()
+        if (-not $script:tabIndTimer.Enabled) { $script:tabIndTimer.Start() }
+    }
+
     function Move-TabIndicator($targetX) {
         # Smooth, frame-rate-independent glide (ease-out-cubic). Kept for standalone use;
         # the tab switch drives the indicator through Switch-Panels for a synced motion.
@@ -756,25 +834,12 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
         $outgoing.Location = New-Object System.Drawing.Point(0, 0)
         if ($null -ne $script:tabIndicator) { $script:tabIndicator.BringToFront() }
 
-        # Single accent bar glides smoothly to the selected tab (ease-out-cubic:
-        # quick off the mark, gentle soft landing).
-        if ($null -ne $indicatorTargetX -and $null -ne $script:tabIndicator) {
-            $startX = [double]$script:tabIndicator.Location.X
-            $delta  = $indicatorTargetX - $startX
-            if ([math]::Abs($delta) -ge 1) {
-                $sw = [System.Diagnostics.Stopwatch]::StartNew()
-                $dur = 260.0
-                while ($true) {
-                    $t = $sw.Elapsed.TotalMilliseconds / $dur
-                    if ($t -ge 1) { break }
-                    $ease = 1 - [math]::Pow(1 - $t, 3)
-                    $x = [int]($startX + $delta * $ease)
-                    $script:tabIndicator.Location = New-Object System.Drawing.Point($x, 113)
-                    [System.Windows.Forms.Application]::DoEvents()
-                    Start-Sleep -Milliseconds 5
-                }
-            }
-            $script:tabIndicator.Location = New-Object System.Drawing.Point([int]$indicatorTargetX, 113)
+        # Kick off the non-blocking "running line" glide. This returns immediately
+        # (the timer does the animation), so the click handler never blocks and a
+        # rapid second click just re-targets the line - no freezing, no lag, and
+        # the bar always follows through to the selected tab.
+        if ($null -ne $indicatorTargetX) {
+            Start-TabIndicator $indicatorTargetX
         }
     }
 
