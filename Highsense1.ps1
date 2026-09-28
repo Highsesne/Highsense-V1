@@ -2891,47 +2891,37 @@ Select categories and click Clean Selected.
     $form.Add_Shown({ $script:consoleHideTimer.Start() })
 
     # ==========================================================================
-    # WHITE SPARKLE CURSOR TRAIL
+    # SILKY SILVER CURSOR TRAIL
     # A transparent, click-through, never-activating overlay window floats above
-    # the app and paints a soft white "stardust" trail that follows the pointer.
+    # the app and paints a smooth, flowing silver-white glowing ribbon that
+    # follows the pointer (a spring/follower chain => liquid-smooth, no jitter).
     # Over the app background the native arrow is hidden ($blankCursor) so the
-    # sparkle IS the cursor; over any clickable card/button the normal Hand
-    # pointer returns and the trail politely pauses (premium, calm, no clutter).
+    # glowing trail IS the cursor; over any clickable card/button the normal Hand
+    # pointer returns and the trail smoothly fades away (premium, calm, clean).
     # ==========================================================================
-    $script:sparkParticles = New-Object System.Collections.ArrayList
+    $script:trailN = 24
+    $script:trailPts = $null
     $script:overInteractive = $false
-    $script:sparkLastPt = $null
-    $script:sparkRnd = New-Object System.Random
+    $script:trailStrength = 0.0
 
-    # Draw one soft 4-point sparkle (a twinkle star) centred at cx,cy.
-    function Draw-Sparkle {
+    # Draw a soft round silver-white bloom (the glowing head of the trail).
+    function Draw-Bloom {
         param($g, [double]$cx, [double]$cy, [double]$r, [int]$alpha)
         if ($alpha -le 0 -or $r -le 0.2) { return }
         if ($alpha -gt 255) { $alpha = 255 }
-        # soft round glow behind the star for a premium bloom
-        $glowA = [int]($alpha * 0.35)
-        if ($glowA -gt 0) {
-            $gr = $r * 2.2
-            $gb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($glowA, 255, 255, 255))
-            $g.FillEllipse($gb, [single]($cx - $gr), [single]($cy - $gr), [single]($gr * 2), [single]($gr * 2))
-            $gb.Dispose()
+        # layered halo: a few translucent rings build a smooth premium glow
+        for ($s = 3; $s -ge 1; $s--) {
+            $rr = $r * $s
+            $aa = [int]($alpha * (0.08 + 0.10 / $s))
+            if ($aa -le 0) { continue }
+            $bb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($aa, 210, 222, 246))
+            $g.FillEllipse($bb, [single]($cx - $rr), [single]($cy - $rr), [single]($rr * 2), [single]($rr * 2))
+            $bb.Dispose()
         }
-        # 4-point star built from a thin pinched diamond on each axis
-        $long = $r * 1.9
-        $short = $r * 0.42
-        $pts = @(
-            (New-Object System.Drawing.PointF([single]$cx,           [single]($cy - $long))),
-            (New-Object System.Drawing.PointF([single]($cx + $short), [single]$cy)),
-            (New-Object System.Drawing.PointF([single]($cx + $long),  [single]$cy)),
-            (New-Object System.Drawing.PointF([single]($cx + $short), [single]$cy)),
-            (New-Object System.Drawing.PointF([single]$cx,           [single]($cy + $long))),
-            (New-Object System.Drawing.PointF([single]($cx - $short), [single]$cy)),
-            (New-Object System.Drawing.PointF([single]($cx - $long),  [single]$cy)),
-            (New-Object System.Drawing.PointF([single]($cx - $short), [single]$cy))
-        )
-        $sb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($alpha, 255, 255, 255))
-        $g.FillPolygon($sb, $pts)
-        $sb.Dispose()
+        # bright near-white core
+        $cb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($alpha, 252, 253, 255))
+        $g.FillEllipse($cb, [single]($cx - $r * 0.5), [single]($cy - $r * 0.5), [single]$r, [single]$r)
+        $cb.Dispose()
     }
 
     # The transparent overlay window itself.
@@ -2947,15 +2937,45 @@ Select categories and click Clean Selected.
 
     $script:sparkOverlay.Add_Paint({
         param($s, $e)
+        $pts = $script:trailPts
+        if ($null -eq $pts) { return }
+        $strength = [double]$script:trailStrength
+        if ($strength -le 0.01) { return }
         $g = $e.Graphics
         $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
         $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-        foreach ($p in $script:sparkParticles) {
-            $lifeFrac = $p.life / $p.maxlife
-            $al = [int](255 * $lifeFrac)
-            $rr = [double]$p.size * (0.35 + 0.65 * $lifeFrac)
-            Draw-Sparkle $g $p.x $p.y $rr $al
+        $n = $pts.Length
+        $maxW = 7.0
+        $maxA = 230.0
+        # draw tail -> head so the bright head sits on top; width & alpha taper
+        # smoothly from the glowing head down to a whisper-thin fading tail
+        for ($i = $n - 2; $i -ge 0; $i--) {
+            $t = $i / [double]($n - 1)
+            $f = 1.0 - $t
+            $w = $maxW * [math]::Pow($f, 0.85)
+            if ($w -lt 0.4) { continue }
+            $a = [int]($maxA * [math]::Pow($f, 1.35) * $strength)
+            if ($a -le 2) { continue }
+            $x1 = [single]$pts[$i].x;     $y1 = [single]$pts[$i].y
+            $x2 = [single]$pts[$i + 1].x; $y2 = [single]$pts[$i + 1].y
+            # soft silver glow underlay
+            $ga = [int]($a * 0.30)
+            if ($ga -gt 0) {
+                $gp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($ga, 196, 210, 238), [single]($w * 2.4))
+                $gp.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+                $gp.EndCap   = [System.Drawing.Drawing2D.LineCap]::Round
+                $g.DrawLine($gp, $x1, $y1, $x2, $y2)
+                $gp.Dispose()
+            }
+            # bright silver-white core
+            $cp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($a, 248, 250, 255), [single]$w)
+            $cp.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+            $cp.EndCap   = [System.Drawing.Drawing2D.LineCap]::Round
+            $g.DrawLine($cp, $x1, $y1, $x2, $y2)
+            $cp.Dispose()
         }
+        # glowing silver head
+        Draw-Bloom $g $pts[0].x $pts[0].y 6.5 ([int](235 * $strength))
     })
 
     # Keep the overlay glued exactly on top of the main window.
@@ -2967,7 +2987,8 @@ Select categories and click Clean Selected.
     $form.Add_LocationChanged($syncOverlay)
     $form.Add_SizeChanged($syncOverlay)
 
-    # 16ms (~60fps) driver: spawn along the pointer path + age/fade particles.
+    # 16ms (~60fps) driver: eases the follower chain toward the pointer + fades
+    # the whole ribbon in/out. All motion is interpolated => silky, no popping.
     $script:sparkTimer = New-Object System.Windows.Forms.Timer
     $script:sparkTimer.Interval = 16
     $script:sparkTimer.Add_Tick({
@@ -2985,47 +3006,34 @@ Select categories and click Clean Selected.
         $lx = $screenPt.X - $b.X
         $ly = $screenPt.Y - $b.Y
 
-        # Spawn only over the app background (not over clickable Hand controls),
-        # while focused & inside the window => trail pauses on buttons/cards.
-        if ($isForeground -and $inside -and -not $script:overInteractive) {
-            $moved = 0.0
-            if ($null -ne $script:sparkLastPt) {
-                $dx = $lx - $script:sparkLastPt.X
-                $dy = $ly - $script:sparkLastPt.Y
-                $moved = [math]::Sqrt($dx * $dx + $dy * $dy)
-            }
-            # more sparkles when moving faster, plus a gentle idle shimmer
-            $spawn = [int]([math]::Min(4, [math]::Floor($moved / 6))) + 1
-            for ($k = 0; $k -lt $spawn; $k++) {
-                if ($script:sparkParticles.Count -ge 46) { break }
-                $ox = ($script:sparkRnd.NextDouble() - 0.5) * 10
-                $oy = ($script:sparkRnd.NextDouble() - 0.5) * 10
-                [void]$script:sparkParticles.Add(@{
-                    x = $lx + $ox
-                    y = $ly + $oy
-                    vx = ($script:sparkRnd.NextDouble() - 0.5) * 0.8
-                    vy = ($script:sparkRnd.NextDouble() - 0.5) * 0.8 - 0.15
-                    life = 1.0
-                    maxlife = 1.0
-                    size = 2.0 + $script:sparkRnd.NextDouble() * 2.5
-                })
+        $n = $script:trailN
+        # lazily build the follower chain, every node starting on the cursor
+        if ($null -eq $script:trailPts) {
+            $script:trailPts = New-Object 'object[]' $n
+            for ($j = 0; $j -lt $n; $j++) {
+                $script:trailPts[$j] = @{ x = [double]$lx; y = [double]$ly }
             }
         }
-        $script:sparkLastPt = New-Object System.Drawing.PointF([single]$lx, [single]$ly)
+        $pts = $script:trailPts
 
-        # age + drift every particle; soft gravity gives a graceful settle
-        for ($i = $script:sparkParticles.Count - 1; $i -ge 0; $i--) {
-            $p = $script:sparkParticles[$i]
-            $p.life -= 0.045
-            if ($p.life -le 0) { $script:sparkParticles.RemoveAt($i); continue }
-            $p.x += $p.vx
-            $p.y += $p.vy
-            $p.vy += 0.03
+        # Ribbon is visible over the app background; it smoothly fades away while
+        # hovering clickable cards/buttons (Hand cursor) or when the pointer
+        # leaves the window / the app loses focus => calm, premium, never cluttered.
+        $active = ($isForeground -and $inside -and -not $script:overInteractive)
+        $strTarget = if ($active) { 1.0 } else { 0.0 }
+        $script:trailStrength += ($strTarget - $script:trailStrength) * 0.18
+
+        # Silky spring-chain follow: the head eases toward the real cursor and
+        # each node eases toward the node ahead of it, giving that smooth flowing
+        # "liquid" trail with no jitter and no popping.
+        $pts[0].x += ($lx - $pts[0].x) * 0.55
+        $pts[0].y += ($ly - $pts[0].y) * 0.55
+        for ($i = 1; $i -lt $n; $i++) {
+            $pts[$i].x += ($pts[$i - 1].x - $pts[$i].x) * 0.42
+            $pts[$i].y += ($pts[$i - 1].y - $pts[$i].y) * 0.42
         }
 
-        if ($script:sparkParticles.Count -gt 0 -or $isForeground) {
-            try { $script:sparkOverlay.Invalidate() } catch {}
-        }
+        try { $script:sparkOverlay.Invalidate() } catch {}
     })
 
     # Recursively hook every clickable (Hand-cursor) control so the trail pauses
