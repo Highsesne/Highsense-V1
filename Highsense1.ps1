@@ -66,6 +66,23 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
         }
     } catch {}
 
+    # Win32 helper: lets the sparkle overlay be click-through + never-activating
+    # (so it floats above the app painting the cursor trail without ever stealing
+    # focus or blocking clicks), plus a foreground check so sparkles only run
+    # while the HIGHSENSE window is actually focused.
+    try {
+        if (-not ('Highsense.WinExt' -as [type])) {
+            Add-Type -Namespace Highsense -Name WinExt -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
+public static extern int GetWindowLong(System.IntPtr hWnd, int nIndex);
+[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
+public static extern int SetWindowLong(System.IntPtr hWnd, int nIndex, int dwNewLong);
+[System.Runtime.InteropServices.DllImport("user32.dll")]
+public static extern System.IntPtr GetForegroundWindow();
+'@
+        }
+    } catch {}
+
     [System.Windows.Forms.Application]::EnableVisualStyles()
     [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
@@ -189,6 +206,19 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
     $form.BackColor = $bgColor
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
     $form.MaximizeBox = $false
+
+    # Hidden native cursor (fully transparent 16x16). The white sparkle trail
+    # becomes the visible pointer over the app background; clickable categories
+    # keep the normal Hand pointer. $idleCursor is reused everywhere the code
+    # used to reset the cursor back to the default arrow, so the arrow never
+    # "comes back" after an operation finishes.
+    $script:blankCursor = [System.Windows.Forms.Cursors]::Default
+    try {
+        $blankBmp = New-Object System.Drawing.Bitmap(16, 16)
+        $script:blankCursor = New-Object System.Windows.Forms.Cursor($blankBmp.GetHicon())
+    } catch {}
+    $script:idleCursor = $script:blankCursor
+    $form.Cursor = $script:blankCursor
 
     # Window corners are rounded by the OS (DWM) below - see $form.Add_Shown -
     # which yields perfectly smooth, anti-aliased edges (no hand-drawn border needed).
@@ -788,6 +818,20 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
             $g = [int]($a.base.G + ($a.hover.G - $a.base.G) * $t)
             $b = [int]($a.base.B + ($a.hover.B - $a.base.B) * $t)
             try { $a.ctrl.BackColor = [System.Drawing.Color]::FromArgb($r, $g, $b) } catch {}
+            # Premium hover "pop": smoothly scale the card out from its centre,
+            # reusing the same eased 0..1 value that drives the colour fade so the
+            # grow/shrink is perfectly in sync and lag-free.
+            if ($null -ne $a.baseBounds) {
+                try {
+                    $bb = $a.baseBounds
+                    $sc = 1.0 + ([double]$a.scale) * $t
+                    $nw = [int]($bb.Width * $sc)
+                    $nh = [int]($bb.Height * $sc)
+                    $nx = $bb.X - [int](($nw - $bb.Width) / 2)
+                    $ny = $bb.Y - [int](($nh - $bb.Height) / 2)
+                    $a.ctrl.SetBounds($nx, $ny, $nw, $nh)
+                } catch {}
+            }
             if ($done) { $script:animControls.RemoveAt($i) }
         }
         if ($script:animControls.Count -eq 0) { $script:animTimer.Stop() }
@@ -885,7 +929,7 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
         # Smooth anti-aliased pill (painted, not Region-clipped, so corners stay crisp)
         Set-DoubleBuffered $btn
 
-        $btn.Tag = @{ ctrl = $btn; cur = 0.0; target = 0.0; base = $btnColor; hover = $btnHoverColor }
+        $btn.Tag = @{ ctrl = $btn; cur = 0.0; target = 0.0; base = $btnColor; hover = $btnHoverColor; baseBounds = (New-Object System.Drawing.Rectangle([int]$x, [int]$y, [int]$w, [int]$h)); scale = 0.05 }
 
         $btn.Add_MouseEnter({ if ($this.Enabled) { $this.Tag.target = 1.0; Register-Anim $this.Tag; $this.ForeColor = [System.Drawing.Color]::White } })
         $btn.Add_MouseLeave({ if ($this.Enabled) { $this.Tag.target = 0.0; Register-Anim $this.Tag; $this.ForeColor = $btnText } })
@@ -1481,7 +1525,7 @@ function Restore-AllBackups {
         Set-Progress 0
 
         $tab1Panel.Enabled = $true
-        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        $form.Cursor = $script:idleCursor
     })
     
     # ---------------------------------------------------------
@@ -1720,7 +1764,7 @@ function Restore-AllBackups {
         Set-Progress 0
 
         $tab1Panel.Enabled = $true
-        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        $form.Cursor = $script:idleCursor
     })
     
     # ---------------------------------------------------------
@@ -1835,7 +1879,7 @@ $btnPowerplan = (Create-CustomButton $tab1Panel "POWERPLAN" 286 262 240 38 8.5 {
         Write-Log "[ERROR] Power Plan: $($_.Exception.Message)"
     } finally {
         $tab1Panel.Enabled = $true
-        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        $form.Cursor = $script:idleCursor
     }
 })
 
@@ -1994,7 +2038,7 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
     Set-Progress 0
 
     $tab1Panel.Enabled = $true
-    $form.Cursor = [System.Windows.Forms.Cursors]::Default
+    $form.Cursor = $script:idleCursor
 })
 
     $btnSystemTweaks = (Create-CustomButton $tab1Panel "SYSTEM TWEAKS" 286 312 240 38 8.5 {
@@ -2395,7 +2439,7 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
         Set-Progress 0
 
         $tab1Panel.Enabled = $true
-        $form.Cursor = [System.Windows.Forms.Cursors]::Default
+        $form.Cursor = $script:idleCursor
     })
 
     $btnInputlag = (Create-CustomButton $tab1Panel "INPUT / REG" 24 368 502 38 8.5 {
@@ -2464,7 +2508,7 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
     Set-Progress 0
 
     $tab1Panel.Enabled = $true
-    $form.Cursor = [System.Windows.Forms.Cursors]::Default
+    $form.Cursor = $script:idleCursor
 })
 
 
@@ -2789,7 +2833,7 @@ Select categories and click Clean Selected.
           Start-Sleep -Milliseconds 300
           Set-CleanerProgress 0
           $cleanerContainer.Enabled = $true
-          $form.Cursor = [System.Windows.Forms.Cursors]::Default
+          $form.Cursor = $script:idleCursor
       }
     })
 
@@ -2845,6 +2889,179 @@ Select categories and click Clean Selected.
         } catch {}
     })
     $form.Add_Shown({ $script:consoleHideTimer.Start() })
+
+    # ==========================================================================
+    # WHITE SPARKLE CURSOR TRAIL
+    # A transparent, click-through, never-activating overlay window floats above
+    # the app and paints a soft white "stardust" trail that follows the pointer.
+    # Over the app background the native arrow is hidden ($blankCursor) so the
+    # sparkle IS the cursor; over any clickable card/button the normal Hand
+    # pointer returns and the trail politely pauses (premium, calm, no clutter).
+    # ==========================================================================
+    $script:sparkParticles = New-Object System.Collections.ArrayList
+    $script:overInteractive = $false
+    $script:sparkLastPt = $null
+    $script:sparkRnd = New-Object System.Random
+
+    # Draw one soft 4-point sparkle (a twinkle star) centred at cx,cy.
+    function Draw-Sparkle {
+        param($g, [double]$cx, [double]$cy, [double]$r, [int]$alpha)
+        if ($alpha -le 0 -or $r -le 0.2) { return }
+        if ($alpha -gt 255) { $alpha = 255 }
+        # soft round glow behind the star for a premium bloom
+        $glowA = [int]($alpha * 0.35)
+        if ($glowA -gt 0) {
+            $gr = $r * 2.2
+            $gb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($glowA, 255, 255, 255))
+            $g.FillEllipse($gb, [single]($cx - $gr), [single]($cy - $gr), [single]($gr * 2), [single]($gr * 2))
+            $gb.Dispose()
+        }
+        # 4-point star built from a thin pinched diamond on each axis
+        $long = $r * 1.9
+        $short = $r * 0.42
+        $pts = @(
+            (New-Object System.Drawing.PointF([single]$cx,           [single]($cy - $long))),
+            (New-Object System.Drawing.PointF([single]($cx + $short), [single]$cy)),
+            (New-Object System.Drawing.PointF([single]($cx + $long),  [single]$cy)),
+            (New-Object System.Drawing.PointF([single]($cx + $short), [single]$cy)),
+            (New-Object System.Drawing.PointF([single]$cx,           [single]($cy + $long))),
+            (New-Object System.Drawing.PointF([single]($cx - $short), [single]$cy)),
+            (New-Object System.Drawing.PointF([single]($cx - $long),  [single]$cy)),
+            (New-Object System.Drawing.PointF([single]($cx - $short), [single]$cy))
+        )
+        $sb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($alpha, 255, 255, 255))
+        $g.FillPolygon($sb, $pts)
+        $sb.Dispose()
+    }
+
+    # The transparent overlay window itself.
+    $script:sparkOverlay = New-Object System.Windows.Forms.Form
+    $script:sparkOverlay.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+    $script:sparkOverlay.ShowInTaskbar = $false
+    $script:sparkOverlay.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+    $script:sparkOverlay.BackColor = [System.Drawing.Color]::Black
+    $script:sparkOverlay.TransparencyKey = [System.Drawing.Color]::Black
+    $script:sparkOverlay.TopMost = $true
+    $script:sparkOverlay.Enabled = $false
+    Set-DoubleBuffered $script:sparkOverlay
+
+    $script:sparkOverlay.Add_Paint({
+        param($s, $e)
+        $g = $e.Graphics
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        foreach ($p in $script:sparkParticles) {
+            $lifeFrac = $p.life / $p.maxlife
+            $al = [int](255 * $lifeFrac)
+            $rr = [double]$p.size * (0.35 + 0.65 * $lifeFrac)
+            Draw-Sparkle $g $p.x $p.y $rr $al
+        }
+    })
+
+    # Keep the overlay glued exactly on top of the main window.
+    $syncOverlay = {
+        try {
+            $script:sparkOverlay.Bounds = $form.Bounds
+        } catch {}
+    }
+    $form.Add_LocationChanged($syncOverlay)
+    $form.Add_SizeChanged($syncOverlay)
+
+    # 16ms (~60fps) driver: spawn along the pointer path + age/fade particles.
+    $script:sparkTimer = New-Object System.Windows.Forms.Timer
+    $script:sparkTimer.Interval = 16
+    $script:sparkTimer.Add_Tick({
+        # only animate while HIGHSENSE is the focused foreground window
+        $isForeground = $false
+        try {
+            $fg = [Highsense.WinExt]::GetForegroundWindow()
+            if ($fg -eq $form.Handle -or $fg -eq $script:sparkOverlay.Handle) { $isForeground = $true }
+        } catch { $isForeground = $true }
+
+        $screenPt = [System.Windows.Forms.Cursor]::Position
+        $b = $form.Bounds
+        $inside = ($screenPt.X -ge $b.X -and $screenPt.X -lt ($b.X + $b.Width) -and $screenPt.Y -ge $b.Y -and $screenPt.Y -lt ($b.Y + $b.Height))
+        # pointer in overlay-local coordinates
+        $lx = $screenPt.X - $b.X
+        $ly = $screenPt.Y - $b.Y
+
+        # Spawn only over the app background (not over clickable Hand controls),
+        # while focused & inside the window => trail pauses on buttons/cards.
+        if ($isForeground -and $inside -and -not $script:overInteractive) {
+            $moved = 0.0
+            if ($null -ne $script:sparkLastPt) {
+                $dx = $lx - $script:sparkLastPt.X
+                $dy = $ly - $script:sparkLastPt.Y
+                $moved = [math]::Sqrt($dx * $dx + $dy * $dy)
+            }
+            # more sparkles when moving faster, plus a gentle idle shimmer
+            $spawn = [int]([math]::Min(4, [math]::Floor($moved / 6))) + 1
+            for ($k = 0; $k -lt $spawn; $k++) {
+                if ($script:sparkParticles.Count -ge 46) { break }
+                $ox = ($script:sparkRnd.NextDouble() - 0.5) * 10
+                $oy = ($script:sparkRnd.NextDouble() - 0.5) * 10
+                [void]$script:sparkParticles.Add(@{
+                    x = $lx + $ox
+                    y = $ly + $oy
+                    vx = ($script:sparkRnd.NextDouble() - 0.5) * 0.8
+                    vy = ($script:sparkRnd.NextDouble() - 0.5) * 0.8 - 0.15
+                    life = 1.0
+                    maxlife = 1.0
+                    size = 2.0 + $script:sparkRnd.NextDouble() * 2.5
+                })
+            }
+        }
+        $script:sparkLastPt = New-Object System.Drawing.PointF([single]$lx, [single]$ly)
+
+        # age + drift every particle; soft gravity gives a graceful settle
+        for ($i = $script:sparkParticles.Count - 1; $i -ge 0; $i--) {
+            $p = $script:sparkParticles[$i]
+            $p.life -= 0.045
+            if ($p.life -le 0) { $script:sparkParticles.RemoveAt($i); continue }
+            $p.x += $p.vx
+            $p.y += $p.vy
+            $p.vy += 0.03
+        }
+
+        if ($script:sparkParticles.Count -gt 0 -or $isForeground) {
+            try { $script:sparkOverlay.Invalidate() } catch {}
+        }
+    })
+
+    # Recursively hook every clickable (Hand-cursor) control so the trail pauses
+    # and the normal Hand pointer shows while hovering categories / buttons.
+    function Wire-InteractiveFlag {
+        param($ctrl)
+        foreach ($child in $ctrl.Controls) {
+            try {
+                if ($child.Cursor -eq [System.Windows.Forms.Cursors]::Hand) {
+                    $child.Add_MouseEnter({ $script:overInteractive = $true })
+                    $child.Add_MouseLeave({ $script:overInteractive = $false })
+                }
+            } catch {}
+            if ($child.Controls.Count -gt 0) { Wire-InteractiveFlag $child }
+        }
+    }
+
+    $form.Add_Shown({
+        try {
+            Wire-InteractiveFlag $form
+            # make the overlay layered + click-through + non-activating
+            $ex = [Highsense.WinExt]::GetWindowLong($script:sparkOverlay.Handle, -20)
+            $ex = $ex -bor 0x80000 -bor 0x20 -bor 0x08000000 -bor 0x80
+            [void][Highsense.WinExt]::SetWindowLong($script:sparkOverlay.Handle, -20, $ex)
+            $script:sparkOverlay.Bounds = $form.Bounds
+            $script:sparkOverlay.Show()
+            $script:sparkOverlay.TopMost = $true
+            $form.Activate()
+            $script:sparkTimer.Start()
+        } catch {}
+    })
+
+    $form.Add_FormClosing({
+        try { $script:sparkTimer.Stop() } catch {}
+        try { $script:sparkOverlay.Close(); $script:sparkOverlay.Dispose() } catch {}
+    })
 
     [void]$form.ShowDialog()
 }
