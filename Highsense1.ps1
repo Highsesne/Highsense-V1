@@ -83,6 +83,48 @@ public static extern System.IntPtr GetForegroundWindow();
         }
     } catch {}
 
+    # Per-pixel-alpha layered-window helper. A soft glowing smoke trail needs TRUE
+    # alpha blending against the desktop (not 1-bit TransparencyKey, which turns
+    # faint glow into muddy boxes), so we render the trail into a 32bpp ARGB
+    # bitmap and push it with UpdateLayeredWindow => buttery, premium soft glow.
+    try {
+        if (-not ('Highsense.Layered' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace Highsense {
+    public static class Layered {
+        [StructLayout(LayoutKind.Sequential)] public struct POINT { public int x; public int y; }
+        [StructLayout(LayoutKind.Sequential)] public struct SIZE { public int cx; public int cy; }
+        [StructLayout(LayoutKind.Sequential, Pack = 1)] public struct BLENDFUNCTION {
+            public byte BlendOp; public byte BlendFlags; public byte SourceConstantAlpha; public byte AlphaFormat;
+        }
+        [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);
+        [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
+        [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr hDC);
+        [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr hDC);
+        [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr hDC, IntPtr hObject);
+        [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
+        [DllImport("user32.dll")] public static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
+        public static void Push(IntPtr hwnd, IntPtr hBitmap, int x, int y, int w, int h) {
+            IntPtr screenDc = GetDC(IntPtr.Zero);
+            IntPtr memDc = CreateCompatibleDC(screenDc);
+            IntPtr old = SelectObject(memDc, hBitmap);
+            SIZE size; size.cx = w; size.cy = h;
+            POINT src; src.x = 0; src.y = 0;
+            POINT dst; dst.x = x; dst.y = y;
+            BLENDFUNCTION blend; blend.BlendOp = 0; blend.BlendFlags = 0; blend.SourceConstantAlpha = 255; blend.AlphaFormat = 1;
+            UpdateLayeredWindow(hwnd, screenDc, ref dst, ref size, memDc, ref src, 0, ref blend, 2);
+            SelectObject(memDc, old);
+            DeleteDC(memDc);
+            ReleaseDC(IntPtr.Zero, screenDc);
+        }
+    }
+}
+'@
+        }
+    } catch {}
+
     [System.Windows.Forms.Application]::EnableVisualStyles()
     [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
@@ -2891,108 +2933,107 @@ Select categories and click Clean Selected.
     $form.Add_Shown({ $script:consoleHideTimer.Start() })
 
     # ==========================================================================
-    # SILKY SILVER CURSOR TRAIL
-    # A transparent, click-through, never-activating overlay window floats above
-    # the app and paints a smooth, flowing silver-white glowing ribbon that
-    # follows the pointer (a spring/follower chain => liquid-smooth, no jitter).
-    # Over the app background the native arrow is hidden ($blankCursor) so the
-    # glowing trail IS the cursor; over any clickable card/button the normal Hand
-    # pointer returns and the trail smoothly fades away (premium, calm, clean).
+    # SILVER SMOKE CURSOR TRAIL
+    # A per-pixel-alpha, click-through, never-activating layered overlay floats
+    # above the app and paints a soft, glowing SILVER-WHITE smoke/mist plume that
+    # billows out of the pointer and gently dissipates like breathed vapour -
+    # smooth and premium, with no hard "snake" edges. Over the app background the
+    # native arrow is hidden so the glow IS the cursor; over any clickable
+    # card/button the normal Hand pointer returns and the smoke fades away.
     # ==========================================================================
-    $script:trailN = 24
-    $script:trailPts = $null
     $script:overInteractive = $false
     $script:trailStrength = 0.0
+    $script:smoke = New-Object System.Collections.ArrayList
+    $script:smokeRnd = New-Object System.Random
+    $script:smokeLast = $null
+    $script:smokeEmptyPushed = $false
 
-    # Draw a soft round silver-white bloom (the glowing head of the trail).
-    function Draw-Bloom {
-        param($g, [double]$cx, [double]$cy, [double]$r, [int]$alpha)
-        if ($alpha -le 0 -or $r -le 0.2) { return }
-        if ($alpha -gt 255) { $alpha = 255 }
-        # layered halo: a few translucent rings build a smooth premium glow
-        for ($s = 3; $s -ge 1; $s--) {
-            $rr = $r * $s
-            $aa = [int]($alpha * (0.08 + 0.10 / $s))
-            if ($aa -le 0) { continue }
-            $bb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($aa, 210, 222, 246))
-            $g.FillEllipse($bb, [single]($cx - $rr), [single]($cy - $rr), [single]($rr * 2), [single]($rr * 2))
-            $bb.Dispose()
-        }
-        # bright near-white core
-        $cb = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($alpha, 252, 253, 255))
-        $g.FillEllipse($cb, [single]($cx - $r * 0.5), [single]($cy - $r * 0.5), [single]$r, [single]$r)
-        $cb.Dispose()
-    }
+    # Pre-render ONE soft radial glow sprite (silver-white core -> transparent
+    # edge). Every smoke puff is just this sprite drawn scaled + alpha-faded, so
+    # overlapping puffs build a smooth volumetric cloud very cheaply.
+    $script:glowSprite = New-Object System.Drawing.Bitmap(128, 128, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $gs = [System.Drawing.Graphics]::FromImage($script:glowSprite)
+    $gs.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $gpath = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $gpath.AddEllipse(0, 0, 128, 128)
+    $pgb = New-Object System.Drawing.Drawing2D.PathGradientBrush($gpath)
+    $pgb.CenterPoint = New-Object System.Drawing.PointF(64, 64)
+    $pgb.CenterColor = [System.Drawing.Color]::FromArgb(235, 236, 242, 252)
+    $pgb.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 205, 216, 240))
+    # a soft falloff blend so the edge melts away (no visible disc rim)
+    $blend = New-Object System.Drawing.Drawing2D.Blend(3)
+    $blend.Positions = @([single]0.0, [single]0.55, [single]1.0)
+    $blend.Factors   = @([single]1.0, [single]0.35, [single]0.0)
+    $pgb.Blend = $blend
+    $gs.FillEllipse($pgb, 0, 0, 128, 128)
+    $pgb.Dispose(); $gpath.Dispose(); $gs.Dispose()
 
-    # The transparent overlay window itself.
+    # Reusable full-window ARGB back-buffer (form size is fixed).
+    $script:smokeBuf = New-Object System.Drawing.Bitmap($form.Width, $form.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+
+    # The layered overlay window itself (NO TransparencyKey - alpha is per-pixel).
     $script:sparkOverlay = New-Object System.Windows.Forms.Form
     $script:sparkOverlay.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
     $script:sparkOverlay.ShowInTaskbar = $false
     $script:sparkOverlay.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
-    $script:sparkOverlay.BackColor = [System.Drawing.Color]::Black
-    $script:sparkOverlay.TransparencyKey = [System.Drawing.Color]::Black
     $script:sparkOverlay.TopMost = $true
     $script:sparkOverlay.Enabled = $false
-    Set-DoubleBuffered $script:sparkOverlay
 
-    $script:sparkOverlay.Add_Paint({
-        param($s, $e)
-        $pts = $script:trailPts
-        if ($null -eq $pts) { return }
-        $strength = [double]$script:trailStrength
-        if ($strength -le 0.01) { return }
-        $g = $e.Graphics
-        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-        $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-        $n = $pts.Length
-        $maxW = 7.0
-        $maxA = 230.0
-        # draw tail -> head so the bright head sits on top; width & alpha taper
-        # smoothly from the glowing head down to a whisper-thin fading tail
-        for ($i = $n - 2; $i -ge 0; $i--) {
-            $t = $i / [double]($n - 1)
-            $f = 1.0 - $t
-            $w = $maxW * [math]::Pow($f, 0.85)
-            if ($w -lt 0.4) { continue }
-            $a = [int]($maxA * [math]::Pow($f, 1.35) * $strength)
-            if ($a -le 2) { continue }
-            $x1 = [single]$pts[$i].x;     $y1 = [single]$pts[$i].y
-            $x2 = [single]$pts[$i + 1].x; $y2 = [single]$pts[$i + 1].y
-            # soft silver glow underlay
-            $ga = [int]($a * 0.30)
-            if ($ga -gt 0) {
-                $gp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($ga, 196, 210, 238), [single]($w * 2.4))
-                $gp.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-                $gp.EndCap   = [System.Drawing.Drawing2D.LineCap]::Round
-                $g.DrawLine($gp, $x1, $y1, $x2, $y2)
-                $gp.Dispose()
-            }
-            # bright silver-white core
-            $cp = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($a, 248, 250, 255), [single]$w)
-            $cp.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
-            $cp.EndCap   = [System.Drawing.Drawing2D.LineCap]::Round
-            $g.DrawLine($cp, $x1, $y1, $x2, $y2)
-            $cp.Dispose()
+    # Composite the current smoke cloud into the back-buffer and push it to the
+    # screen with true per-pixel alpha via UpdateLayeredWindow.
+    function Push-Smoke {
+        param([int]$ox, [int]$oy, [double]$headX, [double]$headY, [bool]$drawHead)
+        $g = [System.Drawing.Graphics]::FromImage($script:smokeBuf)
+        $g.Clear([System.Drawing.Color]::FromArgb(0, 0, 0, 0))
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Bilinear
+        $g.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceOver
+        foreach ($p in $script:smoke) {
+            $lifeFrac = $p.life / $p.maxlife
+            if ($lifeFrac -le 0) { continue }
+            # puffs GROW as they age -> soft dissipating vapour
+            $grow = 1.0 - $lifeFrac
+            $sz = $p.size0 + ($p.size1 - $p.size0) * $grow
+            # fade in then out, peaking mid-life -> smooth, no hard pop
+            $fade = [math]::Sin($lifeFrac * [math]::PI)
+            $a = $fade * $p.peak * $script:trailStrength
+            if ($a -le 0.01) { continue }
+            $ia = New-Object System.Drawing.Imaging.ImageAttributes
+            $cm = New-Object System.Drawing.Imaging.ColorMatrix
+            $cm.Matrix33 = [single]([math]::Min(1.0, $a))
+            $ia.SetColorMatrix($cm)
+            $dx = [int]($p.x - $sz / 2)
+            $dy = [int]($p.y - $sz / 2)
+            $rect = New-Object System.Drawing.Rectangle($dx, $dy, [int]$sz, [int]$sz)
+            $g.DrawImage($script:glowSprite, $rect, 0, 0, 128, 128, [System.Drawing.GraphicsUnit]::Pixel, $ia)
+            $ia.Dispose()
         }
-        # glowing silver head
-        Draw-Bloom $g $pts[0].x $pts[0].y 6.5 ([int](235 * $strength))
-    })
-
-    # Keep the overlay glued exactly on top of the main window.
-    $syncOverlay = {
+        # bright glowing head right at the cursor
+        if ($drawHead -and $script:trailStrength -gt 0.02) {
+            $ia = New-Object System.Drawing.Imaging.ImageAttributes
+            $cm = New-Object System.Drawing.Imaging.ColorMatrix
+            $cm.Matrix33 = [single]([math]::Min(1.0, 0.9 * $script:trailStrength))
+            $ia.SetColorMatrix($cm)
+            $hs = 34
+            $rect = New-Object System.Drawing.Rectangle([int]($headX - $hs / 2), [int]($headY - $hs / 2), $hs, $hs)
+            $g.DrawImage($script:glowSprite, $rect, 0, 0, 128, 128, [System.Drawing.GraphicsUnit]::Pixel, $ia)
+            $ia.Dispose()
+        }
+        $g.Dispose()
+        $hBmp = [System.IntPtr]::Zero
         try {
-            $script:sparkOverlay.Bounds = $form.Bounds
+            $hBmp = $script:smokeBuf.GetHbitmap([System.Drawing.Color]::FromArgb(0, 0, 0, 0))
+            [Highsense.Layered]::Push($script:sparkOverlay.Handle, $hBmp, $ox, $oy, $script:smokeBuf.Width, $script:smokeBuf.Height)
         } catch {}
+        finally {
+            if ($hBmp -ne [System.IntPtr]::Zero) { [void][Highsense.Layered]::DeleteObject($hBmp) }
+        }
     }
-    $form.Add_LocationChanged($syncOverlay)
-    $form.Add_SizeChanged($syncOverlay)
 
-    # 16ms (~60fps) driver: eases the follower chain toward the pointer + fades
-    # the whole ribbon in/out. All motion is interpolated => silky, no popping.
+    # ~60fps driver: emit puffs along the pointer path, age/expand/fade the
+    # cloud, then composite + push one layered frame.
     $script:sparkTimer = New-Object System.Windows.Forms.Timer
     $script:sparkTimer.Interval = 16
     $script:sparkTimer.Add_Tick({
-        # only animate while HIGHSENSE is the focused foreground window
         $isForeground = $false
         try {
             $fg = [Highsense.WinExt]::GetForegroundWindow()
@@ -3002,38 +3043,62 @@ Select categories and click Clean Selected.
         $screenPt = [System.Windows.Forms.Cursor]::Position
         $b = $form.Bounds
         $inside = ($screenPt.X -ge $b.X -and $screenPt.X -lt ($b.X + $b.Width) -and $screenPt.Y -ge $b.Y -and $screenPt.Y -lt ($b.Y + $b.Height))
-        # pointer in overlay-local coordinates
         $lx = $screenPt.X - $b.X
         $ly = $screenPt.Y - $b.Y
 
-        $n = $script:trailN
-        # lazily build the follower chain, every node starting on the cursor
-        if ($null -eq $script:trailPts) {
-            $script:trailPts = New-Object 'object[]' $n
-            for ($j = 0; $j -lt $n; $j++) {
-                $script:trailPts[$j] = @{ x = [double]$lx; y = [double]$ly }
-            }
-        }
-        $pts = $script:trailPts
+        # cursor velocity (drives how much vapour is emitted + its momentum)
+        $vx = 0.0; $vy = 0.0
+        if ($null -ne $script:smokeLast) { $vx = $lx - $script:smokeLast.X; $vy = $ly - $script:smokeLast.Y }
+        $speed = [math]::Sqrt($vx * $vx + $vy * $vy)
+        $script:smokeLast = New-Object System.Drawing.PointF([single]$lx, [single]$ly)
 
-        # Ribbon is visible over the app background; it smoothly fades away while
-        # hovering clickable cards/buttons (Hand cursor) or when the pointer
-        # leaves the window / the app loses focus => calm, premium, never cluttered.
+        # global fade in/out => smoke appears over the app background and melts
+        # away over clickable controls / off-window / when unfocused
         $active = ($isForeground -and $inside -and -not $script:overInteractive)
         $strTarget = if ($active) { 1.0 } else { 0.0 }
-        $script:trailStrength += ($strTarget - $script:trailStrength) * 0.18
+        $script:trailStrength += ($strTarget - $script:trailStrength) * 0.16
 
-        # Silky spring-chain follow: the head eases toward the real cursor and
-        # each node eases toward the node ahead of it, giving that smooth flowing
-        # "liquid" trail with no jitter and no popping.
-        $pts[0].x += ($lx - $pts[0].x) * 0.55
-        $pts[0].y += ($ly - $pts[0].y) * 0.55
-        for ($i = 1; $i -lt $n; $i++) {
-            $pts[$i].x += ($pts[$i - 1].x - $pts[$i].x) * 0.42
-            $pts[$i].y += ($pts[$i - 1].y - $pts[$i].y) * 0.42
+        # emit puffs while active; more (and more spread) the faster you move
+        if ($active) {
+            $emit = 1 + [int]([math]::Min(5, $speed / 5))
+            for ($k = 0; $k -lt $emit; $k++) {
+                if ($script:smoke.Count -ge 90) { break }
+                $ang = $script:smokeRnd.NextDouble() * 6.283
+                $spread = $script:smokeRnd.NextDouble() * 4.0
+                $s0 = 16 + $script:smokeRnd.NextDouble() * 12
+                [void]$script:smoke.Add(@{
+                    x = $lx + [math]::Cos($ang) * $spread
+                    y = $ly + [math]::Sin($ang) * $spread
+                    vx = $vx * 0.18 + ([math]::Cos($ang) * 0.6)
+                    vy = $vy * 0.18 + ([math]::Sin($ang) * 0.6) - 0.25
+                    life = 1.0
+                    maxlife = 1.0
+                    size0 = $s0
+                    size1 = $s0 * (2.6 + $script:smokeRnd.NextDouble())
+                    peak = 0.32 + $script:smokeRnd.NextDouble() * 0.18
+                })
+            }
         }
 
-        try { $script:sparkOverlay.Invalidate() } catch {}
+        # age + drift the cloud (viscous slow-down => it curls and settles)
+        for ($i = $script:smoke.Count - 1; $i -ge 0; $i--) {
+            $p = $script:smoke[$i]
+            $p.life -= 0.028
+            if ($p.life -le 0) { $script:smoke.RemoveAt($i); continue }
+            $p.x += $p.vx
+            $p.y += $p.vy
+            $p.vx *= 0.94
+            $p.vy = $p.vy * 0.94 - 0.02
+        }
+
+        # composite + push (or push ONE clearing frame once the cloud is empty)
+        if ($script:smoke.Count -gt 0) {
+            Push-Smoke $b.X $b.Y $lx $ly $active
+            $script:smokeEmptyPushed = $false
+        } elseif (-not $script:smokeEmptyPushed) {
+            Push-Smoke $b.X $b.Y $lx $ly $false
+            $script:smokeEmptyPushed = $true
+        }
     })
 
     # Recursively hook every clickable (Hand-cursor) control so the trail pauses
@@ -3069,6 +3134,8 @@ Select categories and click Clean Selected.
     $form.Add_FormClosing({
         try { $script:sparkTimer.Stop() } catch {}
         try { $script:sparkOverlay.Close(); $script:sparkOverlay.Dispose() } catch {}
+        try { $script:smokeBuf.Dispose() } catch {}
+        try { $script:glowSprite.Dispose() } catch {}
     })
 
     [void]$form.ShowDialog()
