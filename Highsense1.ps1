@@ -66,65 +66,6 @@ public static extern int DwmSetWindowAttribute(System.IntPtr hwnd, int attr, ref
         }
     } catch {}
 
-    # Win32 helper: lets the sparkle overlay be click-through + never-activating
-    # (so it floats above the app painting the cursor trail without ever stealing
-    # focus or blocking clicks), plus a foreground check so sparkles only run
-    # while the HIGHSENSE window is actually focused.
-    try {
-        if (-not ('Highsense.WinExt' -as [type])) {
-            Add-Type -Namespace Highsense -Name WinExt -MemberDefinition @'
-[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
-public static extern int GetWindowLong(System.IntPtr hWnd, int nIndex);
-[System.Runtime.InteropServices.DllImport("user32.dll", SetLastError=true)]
-public static extern int SetWindowLong(System.IntPtr hWnd, int nIndex, int dwNewLong);
-[System.Runtime.InteropServices.DllImport("user32.dll")]
-public static extern System.IntPtr GetForegroundWindow();
-'@
-        }
-    } catch {}
-
-    # Per-pixel-alpha layered-window helper. A soft glowing smoke trail needs TRUE
-    # alpha blending against the desktop (not 1-bit TransparencyKey, which turns
-    # faint glow into muddy boxes), so we render the trail into a 32bpp ARGB
-    # bitmap and push it with UpdateLayeredWindow => buttery, premium soft glow.
-    try {
-        if (-not ('Highsense.Layered' -as [type])) {
-            Add-Type -TypeDefinition @'
-using System;
-using System.Runtime.InteropServices;
-namespace Highsense {
-    public static class Layered {
-        [StructLayout(LayoutKind.Sequential)] public struct POINT { public int x; public int y; }
-        [StructLayout(LayoutKind.Sequential)] public struct SIZE { public int cx; public int cy; }
-        [StructLayout(LayoutKind.Sequential, Pack = 1)] public struct BLENDFUNCTION {
-            public byte BlendOp; public byte BlendFlags; public byte SourceConstantAlpha; public byte AlphaFormat;
-        }
-        [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr hWnd);
-        [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr hWnd, IntPtr hDC);
-        [DllImport("gdi32.dll")] public static extern IntPtr CreateCompatibleDC(IntPtr hDC);
-        [DllImport("gdi32.dll")] public static extern bool DeleteDC(IntPtr hDC);
-        [DllImport("gdi32.dll")] public static extern IntPtr SelectObject(IntPtr hDC, IntPtr hObject);
-        [DllImport("gdi32.dll")] public static extern bool DeleteObject(IntPtr hObject);
-        [DllImport("user32.dll")] public static extern bool UpdateLayeredWindow(IntPtr hwnd, IntPtr hdcDst, ref POINT pptDst, ref SIZE psize, IntPtr hdcSrc, ref POINT pptSrc, int crKey, ref BLENDFUNCTION pblend, int dwFlags);
-        public static void Push(IntPtr hwnd, IntPtr hBitmap, int x, int y, int w, int h) {
-            IntPtr screenDc = GetDC(IntPtr.Zero);
-            IntPtr memDc = CreateCompatibleDC(screenDc);
-            IntPtr old = SelectObject(memDc, hBitmap);
-            SIZE size; size.cx = w; size.cy = h;
-            POINT src; src.x = 0; src.y = 0;
-            POINT dst; dst.x = x; dst.y = y;
-            BLENDFUNCTION blend; blend.BlendOp = 0; blend.BlendFlags = 0; blend.SourceConstantAlpha = 255; blend.AlphaFormat = 1;
-            UpdateLayeredWindow(hwnd, screenDc, ref dst, ref size, memDc, ref src, 0, ref blend, 2);
-            SelectObject(memDc, old);
-            DeleteDC(memDc);
-            ReleaseDC(IntPtr.Zero, screenDc);
-        }
-    }
-}
-'@
-        }
-    } catch {}
-
     [System.Windows.Forms.Application]::EnableVisualStyles()
     [System.Windows.Forms.Application]::SetCompatibleTextRenderingDefault($false)
 
@@ -248,19 +189,6 @@ namespace Highsense {
     $form.BackColor = $bgColor
     $form.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
     $form.MaximizeBox = $false
-
-    # Hidden native cursor (fully transparent 16x16). The white sparkle trail
-    # becomes the visible pointer over the app background; clickable categories
-    # keep the normal Hand pointer. $idleCursor is reused everywhere the code
-    # used to reset the cursor back to the default arrow, so the arrow never
-    # "comes back" after an operation finishes.
-    $script:blankCursor = [System.Windows.Forms.Cursors]::Default
-    try {
-        $blankBmp = New-Object System.Drawing.Bitmap(16, 16)
-        $script:blankCursor = New-Object System.Windows.Forms.Cursor($blankBmp.GetHicon())
-    } catch {}
-    $script:idleCursor = $script:blankCursor
-    $form.Cursor = $script:blankCursor
 
     # Window corners are rounded by the OS (DWM) below - see $form.Add_Shown -
     # which yields perfectly smooth, anti-aliased edges (no hand-drawn border needed).
@@ -860,20 +788,6 @@ namespace Highsense {
             $g = [int]($a.base.G + ($a.hover.G - $a.base.G) * $t)
             $b = [int]($a.base.B + ($a.hover.B - $a.base.B) * $t)
             try { $a.ctrl.BackColor = [System.Drawing.Color]::FromArgb($r, $g, $b) } catch {}
-            # Premium hover "pop": smoothly scale the card out from its centre,
-            # reusing the same eased 0..1 value that drives the colour fade so the
-            # grow/shrink is perfectly in sync and lag-free.
-            if ($null -ne $a.baseBounds) {
-                try {
-                    $bb = $a.baseBounds
-                    $sc = 1.0 + ([double]$a.scale) * $t
-                    $nw = [int]($bb.Width * $sc)
-                    $nh = [int]($bb.Height * $sc)
-                    $nx = $bb.X - [int](($nw - $bb.Width) / 2)
-                    $ny = $bb.Y - [int](($nh - $bb.Height) / 2)
-                    $a.ctrl.SetBounds($nx, $ny, $nw, $nh)
-                } catch {}
-            }
             if ($done) { $script:animControls.RemoveAt($i) }
         }
         if ($script:animControls.Count -eq 0) { $script:animTimer.Stop() }
@@ -971,7 +885,7 @@ namespace Highsense {
         # Smooth anti-aliased pill (painted, not Region-clipped, so corners stay crisp)
         Set-DoubleBuffered $btn
 
-        $btn.Tag = @{ ctrl = $btn; cur = 0.0; target = 0.0; base = $btnColor; hover = $btnHoverColor; baseBounds = (New-Object System.Drawing.Rectangle([int]$x, [int]$y, [int]$w, [int]$h)); scale = 0.05 }
+        $btn.Tag = @{ ctrl = $btn; cur = 0.0; target = 0.0; base = $btnColor; hover = $btnHoverColor }
 
         $btn.Add_MouseEnter({ if ($this.Enabled) { $this.Tag.target = 1.0; Register-Anim $this.Tag; $this.ForeColor = [System.Drawing.Color]::White } })
         $btn.Add_MouseLeave({ if ($this.Enabled) { $this.Tag.target = 0.0; Register-Anim $this.Tag; $this.ForeColor = $btnText } })
@@ -1567,7 +1481,7 @@ function Restore-AllBackups {
         Set-Progress 0
 
         $tab1Panel.Enabled = $true
-        $form.Cursor = $script:idleCursor
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
     })
     
     # ---------------------------------------------------------
@@ -1806,7 +1720,7 @@ function Restore-AllBackups {
         Set-Progress 0
 
         $tab1Panel.Enabled = $true
-        $form.Cursor = $script:idleCursor
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
     })
     
     # ---------------------------------------------------------
@@ -1921,7 +1835,7 @@ $btnPowerplan = (Create-CustomButton $tab1Panel "POWERPLAN" 286 262 240 38 8.5 {
         Write-Log "[ERROR] Power Plan: $($_.Exception.Message)"
     } finally {
         $tab1Panel.Enabled = $true
-        $form.Cursor = $script:idleCursor
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
     }
 })
 
@@ -2080,7 +1994,7 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
     Set-Progress 0
 
     $tab1Panel.Enabled = $true
-    $form.Cursor = $script:idleCursor
+    $form.Cursor = [System.Windows.Forms.Cursors]::Default
 })
 
     $btnSystemTweaks = (Create-CustomButton $tab1Panel "SYSTEM TWEAKS" 286 312 240 38 8.5 {
@@ -2481,7 +2395,7 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
         Set-Progress 0
 
         $tab1Panel.Enabled = $true
-        $form.Cursor = $script:idleCursor
+        $form.Cursor = [System.Windows.Forms.Cursors]::Default
     })
 
     $btnInputlag = (Create-CustomButton $tab1Panel "INPUT / REG" 24 368 502 38 8.5 {
@@ -2550,7 +2464,7 @@ $btnNet = (Create-CustomButton $tab1Panel "NET / REG" 24 312 240 38 8.5 {
     Set-Progress 0
 
     $tab1Panel.Enabled = $true
-    $form.Cursor = $script:idleCursor
+    $form.Cursor = [System.Windows.Forms.Cursors]::Default
 })
 
 
@@ -2875,7 +2789,7 @@ Select categories and click Clean Selected.
           Start-Sleep -Milliseconds 300
           Set-CleanerProgress 0
           $cleanerContainer.Enabled = $true
-          $form.Cursor = $script:idleCursor
+          $form.Cursor = [System.Windows.Forms.Cursors]::Default
       }
     })
 
@@ -2931,212 +2845,6 @@ Select categories and click Clean Selected.
         } catch {}
     })
     $form.Add_Shown({ $script:consoleHideTimer.Start() })
-
-    # ==========================================================================
-    # SILVER SMOKE CURSOR TRAIL
-    # A per-pixel-alpha, click-through, never-activating layered overlay floats
-    # above the app and paints a soft, glowing SILVER-WHITE smoke/mist plume that
-    # billows out of the pointer and gently dissipates like breathed vapour -
-    # smooth and premium, with no hard "snake" edges. Over the app background the
-    # native arrow is hidden so the glow IS the cursor; over any clickable
-    # card/button the normal Hand pointer returns and the smoke fades away.
-    # ==========================================================================
-    $script:overInteractive = $false
-    $script:trailStrength = 0.0
-    $script:smoke = New-Object System.Collections.ArrayList
-    $script:smokeRnd = New-Object System.Random
-    $script:smokeLast = $null
-    $script:smokeEmptyPushed = $false
-
-    # Pre-render ONE soft radial glow sprite (silver-white core -> transparent
-    # edge). Every smoke puff is just this sprite drawn scaled + alpha-faded, so
-    # overlapping puffs build a smooth volumetric cloud very cheaply.
-    $script:glowSprite = New-Object System.Drawing.Bitmap(128, 128, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-    $gs = [System.Drawing.Graphics]::FromImage($script:glowSprite)
-    $gs.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-    $gpath = New-Object System.Drawing.Drawing2D.GraphicsPath
-    $gpath.AddEllipse(0, 0, 128, 128)
-    $pgb = New-Object System.Drawing.Drawing2D.PathGradientBrush($gpath)
-    $pgb.CenterPoint = New-Object System.Drawing.PointF(64, 64)
-    $pgb.CenterColor = [System.Drawing.Color]::FromArgb(235, 236, 242, 252)
-    $pgb.SurroundColors = @([System.Drawing.Color]::FromArgb(0, 205, 216, 240))
-    # a soft falloff blend so the edge melts away (no visible disc rim)
-    $blend = New-Object System.Drawing.Drawing2D.Blend(3)
-    $blend.Positions = @([single]0.0, [single]0.55, [single]1.0)
-    $blend.Factors   = @([single]1.0, [single]0.35, [single]0.0)
-    $pgb.Blend = $blend
-    $gs.FillEllipse($pgb, 0, 0, 128, 128)
-    $pgb.Dispose(); $gpath.Dispose(); $gs.Dispose()
-
-    # Reusable full-window ARGB back-buffer (form size is fixed).
-    $script:smokeBuf = New-Object System.Drawing.Bitmap($form.Width, $form.Height, [System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-
-    # The layered overlay window itself (NO TransparencyKey - alpha is per-pixel).
-    $script:sparkOverlay = New-Object System.Windows.Forms.Form
-    $script:sparkOverlay.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
-    $script:sparkOverlay.ShowInTaskbar = $false
-    $script:sparkOverlay.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
-    $script:sparkOverlay.TopMost = $true
-    $script:sparkOverlay.Enabled = $false
-
-    # Composite the current smoke cloud into the back-buffer and push it to the
-    # screen with true per-pixel alpha via UpdateLayeredWindow.
-    function Push-Smoke {
-        param([int]$ox, [int]$oy, [double]$headX, [double]$headY, [bool]$drawHead)
-        $g = [System.Drawing.Graphics]::FromImage($script:smokeBuf)
-        $g.Clear([System.Drawing.Color]::FromArgb(0, 0, 0, 0))
-        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::Bilinear
-        $g.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceOver
-        foreach ($p in $script:smoke) {
-            $lifeFrac = $p.life / $p.maxlife
-            if ($lifeFrac -le 0) { continue }
-            # puffs GROW as they age -> soft dissipating vapour
-            $grow = 1.0 - $lifeFrac
-            $sz = $p.size0 + ($p.size1 - $p.size0) * $grow
-            # fade in then out, peaking mid-life -> smooth, no hard pop
-            $fade = [math]::Sin($lifeFrac * [math]::PI)
-            $a = $fade * $p.peak * $script:trailStrength
-            if ($a -le 0.01) { continue }
-            $ia = New-Object System.Drawing.Imaging.ImageAttributes
-            $cm = New-Object System.Drawing.Imaging.ColorMatrix
-            $cm.Matrix33 = [single]([math]::Min(1.0, $a))
-            $ia.SetColorMatrix($cm)
-            $dx = [int]($p.x - $sz / 2)
-            $dy = [int]($p.y - $sz / 2)
-            $rect = New-Object System.Drawing.Rectangle($dx, $dy, [int]$sz, [int]$sz)
-            $g.DrawImage($script:glowSprite, $rect, 0, 0, 128, 128, [System.Drawing.GraphicsUnit]::Pixel, $ia)
-            $ia.Dispose()
-        }
-        # bright glowing head right at the cursor
-        if ($drawHead -and $script:trailStrength -gt 0.02) {
-            $ia = New-Object System.Drawing.Imaging.ImageAttributes
-            $cm = New-Object System.Drawing.Imaging.ColorMatrix
-            $cm.Matrix33 = [single]([math]::Min(1.0, 0.9 * $script:trailStrength))
-            $ia.SetColorMatrix($cm)
-            $hs = 34
-            $rect = New-Object System.Drawing.Rectangle([int]($headX - $hs / 2), [int]($headY - $hs / 2), $hs, $hs)
-            $g.DrawImage($script:glowSprite, $rect, 0, 0, 128, 128, [System.Drawing.GraphicsUnit]::Pixel, $ia)
-            $ia.Dispose()
-        }
-        $g.Dispose()
-        $hBmp = [System.IntPtr]::Zero
-        try {
-            $hBmp = $script:smokeBuf.GetHbitmap([System.Drawing.Color]::FromArgb(0, 0, 0, 0))
-            [Highsense.Layered]::Push($script:sparkOverlay.Handle, $hBmp, $ox, $oy, $script:smokeBuf.Width, $script:smokeBuf.Height)
-        } catch {}
-        finally {
-            if ($hBmp -ne [System.IntPtr]::Zero) { [void][Highsense.Layered]::DeleteObject($hBmp) }
-        }
-    }
-
-    # ~60fps driver: emit puffs along the pointer path, age/expand/fade the
-    # cloud, then composite + push one layered frame.
-    $script:sparkTimer = New-Object System.Windows.Forms.Timer
-    $script:sparkTimer.Interval = 16
-    $script:sparkTimer.Add_Tick({
-        $isForeground = $false
-        try {
-            $fg = [Highsense.WinExt]::GetForegroundWindow()
-            if ($fg -eq $form.Handle -or $fg -eq $script:sparkOverlay.Handle) { $isForeground = $true }
-        } catch { $isForeground = $true }
-
-        $screenPt = [System.Windows.Forms.Cursor]::Position
-        $b = $form.Bounds
-        $inside = ($screenPt.X -ge $b.X -and $screenPt.X -lt ($b.X + $b.Width) -and $screenPt.Y -ge $b.Y -and $screenPt.Y -lt ($b.Y + $b.Height))
-        $lx = $screenPt.X - $b.X
-        $ly = $screenPt.Y - $b.Y
-
-        # cursor velocity (drives how much vapour is emitted + its momentum)
-        $vx = 0.0; $vy = 0.0
-        if ($null -ne $script:smokeLast) { $vx = $lx - $script:smokeLast.X; $vy = $ly - $script:smokeLast.Y }
-        $speed = [math]::Sqrt($vx * $vx + $vy * $vy)
-        $script:smokeLast = New-Object System.Drawing.PointF([single]$lx, [single]$ly)
-
-        # global fade in/out => smoke appears over the app background and melts
-        # away over clickable controls / off-window / when unfocused
-        $active = ($isForeground -and $inside -and -not $script:overInteractive)
-        $strTarget = if ($active) { 1.0 } else { 0.0 }
-        $script:trailStrength += ($strTarget - $script:trailStrength) * 0.16
-
-        # emit puffs while active; more (and more spread) the faster you move
-        if ($active) {
-            $emit = 1 + [int]([math]::Min(5, $speed / 5))
-            for ($k = 0; $k -lt $emit; $k++) {
-                if ($script:smoke.Count -ge 90) { break }
-                $ang = $script:smokeRnd.NextDouble() * 6.283
-                $spread = $script:smokeRnd.NextDouble() * 4.0
-                $s0 = 16 + $script:smokeRnd.NextDouble() * 12
-                [void]$script:smoke.Add(@{
-                    x = $lx + [math]::Cos($ang) * $spread
-                    y = $ly + [math]::Sin($ang) * $spread
-                    vx = $vx * 0.18 + ([math]::Cos($ang) * 0.6)
-                    vy = $vy * 0.18 + ([math]::Sin($ang) * 0.6) - 0.25
-                    life = 1.0
-                    maxlife = 1.0
-                    size0 = $s0
-                    size1 = $s0 * (2.6 + $script:smokeRnd.NextDouble())
-                    peak = 0.32 + $script:smokeRnd.NextDouble() * 0.18
-                })
-            }
-        }
-
-        # age + drift the cloud (viscous slow-down => it curls and settles)
-        for ($i = $script:smoke.Count - 1; $i -ge 0; $i--) {
-            $p = $script:smoke[$i]
-            $p.life -= 0.028
-            if ($p.life -le 0) { $script:smoke.RemoveAt($i); continue }
-            $p.x += $p.vx
-            $p.y += $p.vy
-            $p.vx *= 0.94
-            $p.vy = $p.vy * 0.94 - 0.02
-        }
-
-        # composite + push (or push ONE clearing frame once the cloud is empty)
-        if ($script:smoke.Count -gt 0) {
-            Push-Smoke $b.X $b.Y $lx $ly $active
-            $script:smokeEmptyPushed = $false
-        } elseif (-not $script:smokeEmptyPushed) {
-            Push-Smoke $b.X $b.Y $lx $ly $false
-            $script:smokeEmptyPushed = $true
-        }
-    })
-
-    # Recursively hook every clickable (Hand-cursor) control so the trail pauses
-    # and the normal Hand pointer shows while hovering categories / buttons.
-    function Wire-InteractiveFlag {
-        param($ctrl)
-        foreach ($child in $ctrl.Controls) {
-            try {
-                if ($child.Cursor -eq [System.Windows.Forms.Cursors]::Hand) {
-                    $child.Add_MouseEnter({ $script:overInteractive = $true })
-                    $child.Add_MouseLeave({ $script:overInteractive = $false })
-                }
-            } catch {}
-            if ($child.Controls.Count -gt 0) { Wire-InteractiveFlag $child }
-        }
-    }
-
-    $form.Add_Shown({
-        try {
-            Wire-InteractiveFlag $form
-            # make the overlay layered + click-through + non-activating
-            $ex = [Highsense.WinExt]::GetWindowLong($script:sparkOverlay.Handle, -20)
-            $ex = $ex -bor 0x80000 -bor 0x20 -bor 0x08000000 -bor 0x80
-            [void][Highsense.WinExt]::SetWindowLong($script:sparkOverlay.Handle, -20, $ex)
-            $script:sparkOverlay.Bounds = $form.Bounds
-            $script:sparkOverlay.Show()
-            $script:sparkOverlay.TopMost = $true
-            $form.Activate()
-            $script:sparkTimer.Start()
-        } catch {}
-    })
-
-    $form.Add_FormClosing({
-        try { $script:sparkTimer.Stop() } catch {}
-        try { $script:sparkOverlay.Close(); $script:sparkOverlay.Dispose() } catch {}
-        try { $script:smokeBuf.Dispose() } catch {}
-        try { $script:glowSprite.Dispose() } catch {}
-    })
 
     [void]$form.ShowDialog()
 }
